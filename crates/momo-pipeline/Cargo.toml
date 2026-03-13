@@ -1,0 +1,12 @@
+[package]
+name = "momo-pipeline"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+momo-core = { workspace = true }
+momo-decklink = { workspace = true }
+momo-uvc = { workspace = true }
+momo-gpu = { workspace = true }
+crossbeam-channel = { workspace = true }
+tracing = { workspace = true }

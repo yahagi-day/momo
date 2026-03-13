@@ -1,0 +1,8 @@
+[package]
+name = "momo-gpu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+momo-core = { workspace = true }
+tracing = { workspace = true }
