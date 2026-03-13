@@ -22,6 +22,12 @@ pub enum InputSource {
         /// Device path or identifier.
         device_path: String,
     },
+    /// Mock input (color bar test pattern).
+    Mock {
+        width: u32,
+        height: u32,
+        fps: u32,
+    },
 }
 
 /// Configuration for a single output.
