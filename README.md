@@ -1,4 +1,4 @@
-# momo - 映像スプリッター/ルーター
+# MOMO - Multi-Output Media Orchestrator
 
 1系統の映像入力（DeckLink / UVC）を分割・変換して、複数のDeckLinkから同時出力するライブ用途のソフトウェア。
 
