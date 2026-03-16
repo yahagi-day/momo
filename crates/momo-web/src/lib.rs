@@ -8,13 +8,16 @@ pub mod state;
 use axum::routing::{get, post, put};
 use axum::Router;
 use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
 
 use state::AppState;
 
-/// Build the axum router with all API routes and static file serving.
+/// Build the axum router with all API routes.
+///
+/// The UI HTML is embedded at compile time via build.rs:
+/// - If `frontend/dist/index.html` exists during build, the SolidJS SPA is embedded.
+/// - Otherwise, a self-contained fallback HTML is embedded.
 pub fn build_router(state: AppState) -> Router {
-    let mut router = Router::new()
+    Router::new()
         .route("/api/config", get(handlers::config::get_config).put(handlers::config::put_config))
         .route("/api/config/output/{id}", put(handlers::config::patch_output))
         .route("/api/config/save", post(handlers::config::save_config))
@@ -25,18 +28,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/pipeline/stop", post(handlers::pipeline::stop_pipeline))
         .route("/ws/status", get(handlers::ws::ws_handler))
         .route("/api/preview/input", get(handlers::preview::preview_input))
-        .route("/api/preview/output/{id}", get(handlers::preview::preview_output));
-
-    // Serve built frontend if available, otherwise fall back to embedded UI
-    if std::path::Path::new("frontend/dist/index.html").exists() {
-        let static_files = ServeDir::new("frontend/dist")
-            .not_found_service(ServeFile::new("frontend/dist/index.html"));
-        router = router.fallback_service(static_files);
-    } else {
-        router = router.fallback(embedded_ui::index_handler);
-    }
-
-    router
+        .route("/api/preview/output/{id}", get(handlers::preview::preview_output))
+        .fallback(embedded_ui::index_handler)
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
