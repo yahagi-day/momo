@@ -1,145 +1,143 @@
 # MOMO - Multi-Output Media Orchestrator
 
-1系統の映像入力（DeckLink / UVC）を分割・変換して、複数のDeckLinkから同時出力するライブ用途のソフトウェア。
+Live video splitter/router that captures a single video input (DeckLink / UVC / Mock test pattern), applies per-output GPU transforms (crop → scale → flip), and outputs to multiple DeckLink devices simultaneously. A built-in web UI provides configuration, preview, and monitoring.
 
-## システム構成
+## System Overview
 
 ```
-[DeckLink/UVC 入力 1系統]
+[DeckLink/UVC/Mock Input]
     │
     ▼
-[映像処理エンジン (GPU: CUDA)]
-    │  クロップ → スケール → 反転
+[Processing Engine (GPU: CUDA)]
+    │  crop → scale → flip
     │
-    ├→ [DeckLink出力1] 個別設定
-    ├→ [DeckLink出力2] 個別設定
-    ├→ ...N台          個別設定
+    ├→ [DeckLink Output 1]  per-output settings
+    ├→ [DeckLink Output 2]  per-output settings
+    ├→ ...N outputs          per-output settings
     │
-    ├→ [Webプレビュー配信]
+    ├→ [Web Preview (MJPEG)]
     │
-[Web UI (ブラウザ)]
-    │  設定・操作・プレビュー
+[Web UI (Browser)]
+    │  config / control / preview
     │
-[JSON設定ファイル]
-    │  永続化・起動時復元
+[JSON Config File]
+    │  persist / restore on startup
 ```
 
-## ビルド・実行
+## Build & Run
 
 ```bash
-cargo build
-cargo run
-cargo test
-cargo clippy
+cargo build                          # build all crates
+cargo run                            # start server (default: 0.0.0.0:8080)
+cargo run -- --config path.json --port 9090
+cargo test                           # run all tests
+cargo clippy -- -D warnings          # lint
 ```
 
-## プロジェクト構成
+Frontend (optional — a fallback UI is embedded in the binary):
+
+```bash
+cd frontend && npm install && npm run build   # build SolidJS SPA
+cd frontend && npm run dev                    # dev server with proxy to :8080
+```
+
+## Project Structure
 
 ```
 momo/
-├── Cargo.toml                  # ワークスペースルート
+├── Cargo.toml                  # workspace root
 ├── crates/
-│   ├── momo-core/              # 共有型、設定、エラー型
+│   ├── momo-core/              # shared types, config, error
 │   ├── momo-decklink/          # DeckLink C++ FFI (cxx crate)
-│   │   └── cpp/                # C++ブリッジコード
-│   ├── momo-uvc/               # UVC (v4l2 / MediaFoundation)
-│   ├── momo-gpu/               # CUDAカーネル + GPUメモリ管理
+│   ├── momo-uvc/               # UVC input (v4l2 / MediaFoundation)
+│   ├── momo-gpu/               # CUDA kernels + GPU memory management
 │   │   └── kernels/            # crop.cu, scale.cu, flip.cu
-│   ├── momo-pipeline/          # フレームルーティング: input → GPU → outputs
-│   ├── momo-web/               # axum + REST API + WebSocket + MJPEGプレビュー
-│   └── momo-app/               # バイナリ、全体の結合
+│   ├── momo-pipeline/          # frame routing: input → GPU → outputs
+│   ├── momo-web/               # axum REST API + WebSocket + MJPEG preview
+│   └── momo-app/               # binary entry point
 └── frontend/                   # SolidJS + Vite
 ```
 
-### 各クレートの役割
-
-| クレート | 役割 |
+| Crate | Role |
 |---|---|
-| `momo-core` | `Frame`, `Config`, `Error` 等の共有型。JSON設定のserde処理・バリデーション |
-| `momo-decklink` | DeckLink SDK FFI。`VideoInput`/`VideoOutput`トレイト、デバイス列挙 |
-| `momo-uvc` | UVCカメラ入力（Linux: v4l2、Windows: MediaFoundation） |
-| `momo-gpu` | CUDAコンテキスト管理、crop/scale/flipカーネル（PTXロード） |
-| `momo-pipeline` | 入力→GPU→N出力のフレームルーティング管理 |
-| `momo-web` | axum REST API + WebSocket + MJPEGプレビュー配信 |
-| `momo-app` | CLIバイナリ。clap引数解析、全クレートの結合・起動 |
+| `momo-core` | Shared types: `Frame`, `Config`, `Error`. JSON config serde + validation |
+| `momo-decklink` | DeckLink SDK FFI. `VideoInput`/`VideoOutput` traits, device enumeration |
+| `momo-uvc` | UVC camera input (Linux: v4l2, Windows: MediaFoundation) |
+| `momo-gpu` | CUDA context management, crop/scale/flip kernels (PTX) |
+| `momo-pipeline` | Frame routing: input → preview → N outputs. Mock input, preview encoding |
+| `momo-web` | axum REST API + WebSocket + MJPEG preview. UI embedded at compile time |
+| `momo-app` | CLI binary (clap). Wires all crates together |
 
-## 入力仕様
+## Input
 
-- 入力ソース: DeckLink または UVC（切替可能）
-- 同時入力: 1系統
-- 解像度・フレームレート: 可変（自動検出）
+- Sources: DeckLink, UVC, or Mock (color bar test pattern)
+- Single input at a time
+- Resolution and frame rate: configurable per source
 
-## 出力仕様
+## Output
 
-各DeckLink出力ごとに以下を個別設定可能:
+Per-output settings for each DeckLink device:
 
-- **フル表示**: 入力映像をそのまま出力
-- **クロップ**: ピクセル座標指定（x, y, width, height）
-- **スケーリング**: クロップ後に出力フォーマットに合わせてリサイズ
-- **反転**: 水平 / 垂直
-- **出力フォーマット**: 解像度・FPSを出力ごとに個別設定
-- **出力数**: スケーラブル（5系統以上想定）
+- **Full frame**: pass-through
+- **Crop**: pixel coordinates (x, y, width, height)
+- **Scale**: resize to output format after crop
+- **Flip**: horizontal / vertical
+- **Format**: resolution and FPS per output
+- **Scalable**: designed for 5+ simultaneous outputs
 
-## 映像変換パイプライン
+## Processing Pipeline
 
 ```
-入力(CPU) → GPU upload → [出力1: crop→scale→flip (CUDA stream 1)] → D2H → DeckLink出力1
-                        → [出力2: crop→scale→flip (CUDA stream 2)] → D2H → DeckLink出力2
-                        → [出力N: ...]                              → ...
-                        → [Preview: downscale→JPEG]                 → MJPEG配信
+Input(CPU) → GPU upload → [Output 1: crop→scale→flip (CUDA stream 1)] → D2H → DeckLink 1
+                        → [Output 2: crop→scale→flip (CUDA stream 2)] → D2H → DeckLink 2
+                        → [Output N: ...]                              → ...
+                        → [Preview: UYVY→RGB→scale→JPEG]               → MJPEG stream
 ```
 
-- GPU処理（CUDA / GTX1080以上）
-- 全出力が同一GPUソースバッファを共有し、並列CUDAストリームで処理
-- 将来的に回転（90° / 180° / 270°）追加予定
+- GPU processing via CUDA (GTX 1080+)
+- All outputs share a single GPU source buffer with parallel CUDA streams
+- Rotation (90° / 180° / 270°) planned for future
 
 ## API
 
 ```
-GET    /api/devices              デバイス一覧+状態
-GET    /api/config               現在の設定
-PUT    /api/config               設定全体の適用
-PATCH  /api/config/output/:id    単一出力の設定変更
-POST   /api/config/save          JSONに永続化
-POST   /api/config/load          JSONから復元
-GET    /api/status               パイプライン状態
-POST   /api/pipeline/start       開始
-POST   /api/pipeline/stop        停止
-GET    /api/preview/input        入力MJPEGストリーム
-GET    /api/preview/output/:id   出力MJPEGストリーム
-WS     /ws/status                WebSocket: デバイスイベント、FPS
+GET    /api/devices              Device list + status
+GET    /api/config               Current configuration
+PUT    /api/config               Apply full configuration
+PUT    /api/config/output/:id    Update single output transform
+POST   /api/config/save          Persist to JSON file
+POST   /api/config/load          Restore from JSON file
+GET    /api/status               Pipeline state
+POST   /api/pipeline/start       Start pipeline
+POST   /api/pipeline/stop        Stop pipeline
+GET    /api/preview/input        Input MJPEG stream
+GET    /api/preview/output/:id   Output MJPEG stream (stub)
+WS     /ws/status                WebSocket: state changes, FPS, device events
 ```
 
 ## Web UI
 
-- **設定画面**: 入力ソース選択、各出力のパラメータ設定
-- **プレビュー**: 入力映像 + 各出力映像をブラウザで確認
-- **適用ボタン**: パラメータ変更は明示的に適用
-- **ステータス表示**: 各デバイスの状態監視
+- **Status bar**: pipeline state, FPS display, start/stop control
+- **Input panel**: source info + live MJPEG preview
+- **Output cards**: per-output transform settings (crop, flip) with apply button
+- **Config actions**: save/load configuration files
+- **Real-time updates**: WebSocket-driven state and FPS
 
-## 設定永続化
+The UI HTML is embedded into the binary at compile time. If the SolidJS frontend is built (`frontend/dist/`), that is used; otherwise a self-contained fallback HTML is embedded.
 
-- JSON形式で保存・読み込み
-- 起動時に前回設定を復元
-
-## エラーハンドリング
-
-- DeckLink切断時にクラッシュしない（graceful degradation）
-- デバイス状態をWeb UIに反映
-
-## 対応OS
+## Platforms
 
 - Ubuntu
 - Windows
 
-## 技術スタック
+## Tech Stack
 
-| 要素 | 技術 | 理由 |
+| Component | Technology | Rationale |
 |---|---|---|
-| 言語 | Rust | 安全性・パフォーマンス |
-| DeckLink FFI | `cxx` crate | COM-like APIにbindgenは不向き。C++ブリッジで安全にフラット化 |
-| GPU | `cudarc` + nvcc PTX | Rustから安全なCUDA操作。カーネルはPTXとしてロード |
-| Web | axum + SolidJS | axumはtokioネイティブ。SolidJSはリアルタイムUIに最適 |
-| プレビュー | MJPEG over HTTP | 実装がシンプル。将来WebRTC対応可 |
-| スレッド間通信 | crossbeam-channel | 映像スレッドとtokioの橋渡し |
-| 設定保存 | serde_json | |
+| Language | Rust | Safety + performance |
+| DeckLink FFI | `cxx` crate | Safer than bindgen for COM-like C++ APIs |
+| GPU | `cudarc` + nvcc PTX | Safe CUDA from Rust, kernels loaded as PTX |
+| Web | axum + SolidJS | axum is tokio-native; SolidJS for reactive real-time UI |
+| Preview | MJPEG over HTTP | Simple implementation, WebRTC possible in future |
+| Thread bridging | crossbeam-channel | Connects video OS threads with tokio async runtime |
+| Config | serde_json | JSON serialization/deserialization |
