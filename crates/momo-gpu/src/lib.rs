@@ -1,12 +1,26 @@
-//! GPU processing via CUDA.
+//! GPU processing via CUDA with CPU fallback.
 //!
-//! Provides:
-//! - CUDA context and buffer pool management
-//! - Crop, scale, flip kernels (loaded as PTX)
-//! - Per-output CUDA stream processing
+//! Provides frame transformation: crop → scale → flip.
+//!
+//! When the `gpu` feature is enabled, CUDA kernels are used.
+//! Otherwise, CPU fallback implementations are provided.
 
-/// Placeholder for GPU context initialization.
+pub mod processor;
+pub mod transform;
+
+pub use processor::GpuProcessor;
+
+/// Check if CUDA is available on this system.
 pub fn is_cuda_available() -> bool {
-    tracing::warn!("CUDA availability check not yet implemented");
-    false
+    #[cfg(feature = "gpu")]
+    {
+        match cudarc::driver::CudaDevice::new(0) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        false
+    }
 }

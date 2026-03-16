@@ -10,6 +10,10 @@ use crate::mock_input::MockInput;
 
 pub enum InputDriver {
     Mock(MockInput),
+    #[cfg(feature = "decklink")]
+    DeckLink(momo_decklink::input::DeckLinkInput),
+    #[cfg(feature = "uvc")]
+    Uvc(momo_uvc::input::UvcInput),
 }
 
 impl InputDriver {
@@ -17,6 +21,28 @@ impl InputDriver {
         match input {
             InputSource::Mock { width, height, fps } => {
                 Ok(InputDriver::Mock(MockInput::new(*width, *height, *fps)))
+            }
+            #[cfg(feature = "decklink")]
+            InputSource::DeckLink {
+                device_index,
+                display_mode,
+                pixel_format,
+            } => Ok(InputDriver::DeckLink(
+                momo_decklink::input::DeckLinkInput::new(
+                    *device_index,
+                    *display_mode,
+                    *pixel_format,
+                ),
+            )),
+            #[cfg(feature = "uvc")]
+            InputSource::Uvc { device_path } => {
+                // Default to 1920x1080 @ 30fps for UVC cameras
+                Ok(InputDriver::Uvc(momo_uvc::input::UvcInput::new(
+                    device_path,
+                    1920,
+                    1080,
+                    30,
+                )))
             }
             _ => Err(Error::Pipeline(
                 "unsupported input source (hardware not available)".into(),
@@ -31,6 +57,10 @@ impl InputDriver {
     ) -> std::thread::JoinHandle<()> {
         match self {
             InputDriver::Mock(mock) => mock.start(tx, stop_flag),
+            #[cfg(feature = "decklink")]
+            InputDriver::DeckLink(dl) => dl.start(tx, stop_flag),
+            #[cfg(feature = "uvc")]
+            InputDriver::Uvc(uvc) => uvc.start(tx, stop_flag),
         }
     }
 }

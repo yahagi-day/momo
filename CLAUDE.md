@@ -16,6 +16,9 @@ cargo test config_serde_roundtrip    # run a single test by name
 cargo clippy -- -D warnings          # lint (treat warnings as errors)
 cargo run                            # start the server (default: 0.0.0.0:8080)
 cargo run -- --config path.json --port 9090  # custom config and port
+cargo build --features decklink      # build with DeckLink hardware support
+cargo build --features uvc           # build with UVC camera support
+cargo build --features gpu           # build with CUDA GPU processing
 ```
 
 Frontend (requires Node.js, optional — fallback HTML is embedded without it):
@@ -32,9 +35,9 @@ Cargo workspace with 7 crates. Dependency flow is strictly one-directional:
 ```
 momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode, etc.)
   ↑
-  ├── momo-decklink   DeckLink FFI — VideoInput/VideoOutput traits, device enumeration (stub)
-  ├── momo-uvc        UVC camera input (stub)
-  ├── momo-gpu        CUDA kernels (stub)
+  ├── momo-decklink   DeckLink FFI via cxx — device enumeration, input capture, output (feature-gated)
+  ├── momo-uvc        UVC camera input via nokhwa (feature-gated)
+  ├── momo-gpu        GPU processing: crop/scale/flip with CPU fallback (CUDA feature-gated)
   │
   ├── momo-pipeline   frame routing: input → GPU → N outputs (uses decklink, uvc, gpu)
   │     ↑
@@ -45,7 +48,7 @@ momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode,
 
 **Threading model**: Mock/hardware input runs on a dedicated OS thread. A bridge task (`tokio::task::spawn_blocking`) forwards frames from `crossbeam-channel` to `tokio::sync::mpsc` (100ms recv timeout). Preview encoding and FPS tracking run as a single tokio task. Web/API runs on the tokio async runtime.
 
-**Frame flow**: Input thread → crossbeam channel (bounded 4) → bridge task → tokio mpsc (bounded 2) → preview task (UYVY→RGB→scale→JPEG via `spawn_blocking`) → `broadcast::Sender<Vec<u8>>` (capacity 4) → MJPEG endpoint.
+**Frame flow**: Input thread → crossbeam channel (bounded 4) → bridge task → tokio mpsc (bounded 2) → [per-output: GpuProcessor::process() crop→scale→flip → DeckLink output (TODO)] + [preview task (UYVY→RGB→scale→JPEG via `spawn_blocking`) → `broadcast::Sender<Vec<u8>>` (capacity 4) → MJPEG endpoint].
 
 **Event flow**: Pipeline state changes and FPS updates → `broadcast::Sender<PipelineEvent>` (capacity 64) → WebSocket handler forwards as JSON.
 
@@ -58,15 +61,15 @@ momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode,
 | Component | Status | Notes |
 |-----------|--------|-------|
 | momo-core | **Complete** | All types, config, error, frame |
-| momo-decklink | **Stub** | Traits defined, `enumerate_devices()` returns empty |
-| momo-uvc | **Stub** | `enumerate_devices()` returns empty |
-| momo-gpu | **Stub** | `is_cuda_available()` returns false |
+| momo-decklink | **Working** | cxx FFI bridge, feature-gated (`--features decklink`). Input capture, output, device enumeration. Stub without feature. |
+| momo-uvc | **Working** | Feature-gated (`--features uvc`). nokhwa capture, YUYV→UYVY conversion. Stub without feature. |
+| momo-gpu | **Working** | CPU fallback: crop/scale/flip for UYVY. CUDA feature-gated (`--features gpu`). |
 | momo-pipeline | **Working** | Mock input, preview encode, FPS tracking |
 | momo-web | **Working** | All endpoints, WebSocket, MJPEG, embedded UI |
 | momo-app | **Working** | CLI, config loading, default config generation |
 | frontend | **Working** | SolidJS SPA + vanilla JS fallback |
 
-**Next steps**: Implement DeckLink FFI (Phase 1), CUDA GPU processing (Phase 2), UVC camera input (Phase 3).
+**Next steps**: CUDA kernel optimization (replace CPU fallback with `cudarc`), DeckLink output integration (send transformed frames to output devices).
 
 ## Workspace Dependencies
 
@@ -79,6 +82,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"                                                    # ws feature added in momo-web
 crossbeam-channel = "0.5"
+cxx = "1"
+cudarc = { version = "0.16", optional = true }
+nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 clap = { version = "4", features = ["derive"] }
 tower-http = { version = "0.6", features = ["cors"] }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
@@ -86,6 +92,8 @@ async-stream = "0.3"
 ```
 
 Dev dependencies (momo-web only): `tower = "0.5"` (util), `http-body-util = "0.1"` for endpoint testing via `tower::ServiceExt::oneshot`.
+
+Build dependencies (momo-decklink): `cxx-build = "1"` for compiling C++ bridge code when `decklink` feature is enabled.
 
 ## Key Types
 
@@ -104,16 +112,36 @@ Dev dependencies (momo-web only): `tower = "0.5"` (util), `http-body-util = "0.1
 
 ### momo-decklink
 
-- **`DeckLinkDevice`** — `index: u32`, `name: String`, `status: DeviceStatus`.
+- **Feature flag**: `decklink` — enables C++ FFI via `cxx`. Default OFF (stub only). Propagates: `momo-app/decklink` → `momo-pipeline/decklink` → `momo-decklink/decklink`.
+- **`DeckLinkDevice`** — `index: u32`, `name: String`, `model_name: String`, `has_input: bool`, `has_output: bool`, `status: DeviceStatus`.
 - **`VideoInput`** trait (Send) — `start()`, `stop()`, `is_capturing()`.
 - **`VideoOutput`** trait (Send) — `start()`, `stop()`, `send_frame(&Frame)`.
-- **`enumerate_devices()`** — currently returns empty Vec.
+- **`enumerate_devices()`** — with `decklink` feature: queries hardware via `DeckLinkAPIDispatch.cpp` (dlopen). Without: returns empty Vec.
+- **`conversions`** module — `DisplayMode` ↔ BMDDisplayMode (`u32`) and `PixelFormat` ↔ BMDPixelFormat (`u32`) conversions.
+- **`ffi`** module (feature-gated) — `cxx::bridge` to C++ `DeckLinkSystem`, `DeckLinkInputCapture`, `DeckLinkOutputPlayer`.
+- **`input::DeckLinkInput`** (feature-gated) — captures frames on dedicated OS thread via callback → mutex/CV → `get_frame()` polling loop → crossbeam channel.
+- **`output::DeckLinkOutput`** (feature-gated) — implements `VideoOutput`, uses `DisplayVideoFrameSync` with 3-frame pool.
+- **C++ bridge** (`cpp/decklink_bridge.cpp`) — wraps COM interfaces: `IDeckLinkIterator`, `IDeckLinkInput`+`IDeckLinkInputCallback`, `IDeckLinkOutput`+`IDeckLinkMutableVideoFrame`.
+
+### momo-gpu
+
+- **Feature flag**: `gpu` — enables CUDA via `cudarc`. Default OFF (CPU fallback). Propagates: `momo-app/gpu` → `momo-pipeline/gpu` → `momo-gpu/gpu`.
+- **`GpuProcessor`** — `new()`, `process(&Frame, &OutputTransform, Resolution) -> Result<Frame>`. Uses CPU fallback when CUDA unavailable.
+- **`transform`** module — CPU implementations: `crop_uyvy()` (2-pixel aligned), `scale_uyvy_nearest()` (macro-pixel aware), `flip_uyvy()` (horizontal swaps Y0/Y1 within macro-pixel).
+- **`is_cuda_available()`** — with `gpu` feature: attempts `CudaDevice::new(0)`. Without: returns false.
+
+### momo-uvc
+
+- **Feature flag**: `uvc` — enables `nokhwa` camera capture. Default OFF. Propagates: `momo-app/uvc` → `momo-pipeline/uvc` → `momo-uvc/uvc`.
+- **`UvcInput`** (feature-gated) — captures frames via nokhwa on dedicated OS thread, converts YUYV→UYVY, sends via crossbeam channel.
+- **`convert`** module — `yuyv_to_uyvy()`: byte-swap conversion (always available).
+- **`enumerate_devices()`** — with `uvc` feature: queries via `nokhwa::query()`. Without: returns empty Vec.
 
 ### momo-pipeline
 
 - **`Pipeline`** — fields: `state`, `config: Option<Config>`, `config_path: Option<PathBuf>`, `event_tx: broadcast::Sender<PipelineEvent>`, `preview_tx: broadcast::Sender<Vec<u8>>`, `running: Option<RunningState>`. Methods: `new()`, `state()`, `config()`, `subscribe()`, `subscribe_preview()`, `set_config()`, `set_config_path()`, `start()`, `stop()`, `save_config()`, `load_config()`, `update_output()`, `outputs()`.
 - **`PipelineEvent`** — `StateChanged { state }`, `FpsUpdate { fps: f64 }`, `DeviceEvent { device, status }`, `ConfigChanged`, `Error { message }`. Serialized as tagged JSON.
-- **`InputDriver`** — enum: `Mock(MockInput)`. Factory: `from_config(&InputSource)`. Non-Mock sources return error.
+- **`InputDriver`** — enum: `Mock(MockInput)`, `DeckLink(DeckLinkInput)` (feature-gated), `Uvc(UvcInput)` (feature-gated). Factory: `from_config(&InputSource)`.
 - **`MockInput`** — generates UYVY color bars (SMPTE 8-bar pattern: White/Yellow/Cyan/Green/Magenta/Red/Blue/Black). Runs on dedicated OS thread at configured FPS. Stop via `Arc<AtomicBool>`.
 - **`preview.rs`** — `uyvy_to_rgb()` (BT.601 coefficients), `nearest_neighbor_scale()`, `encode_preview()` (→ JPEG via `image::codecs::jpeg::JpegEncoder`).
 
@@ -146,9 +174,15 @@ GET    /api/preview/output/{id}   → 501 Not Implemented (stub)
 WS     /ws/status                 → PipelineEvent JSON messages
 ```
 
-## Tests (30 total)
+## Tests (49 total)
 
 **momo-core** (7): `config_serde_roundtrip`, `config_file_roundtrip`, `config_rejects_empty_outputs`, `config_rejects_duplicate_ids`, `config_rejects_zero_crop`, `config_defaults_applied`, `input_source_uvc_roundtrip`.
+
+**momo-decklink** (5): `display_mode_roundtrip`, `pixel_format_roundtrip`, `unknown_bmd_display_mode`, `unknown_bmd_pixel_format`, `known_bmd_constants`.
+
+**momo-gpu** (12): `crop_uyvy_basic`, `crop_uyvy_full_frame`, `crop_uyvy_out_of_bounds`, `scale_uyvy_nearest_half`, `scale_uyvy_nearest_same_size`, `flip_uyvy_noop`, `flip_uyvy_vertical`, `flip_uyvy_horizontal`, `process_crop_scale_flip`, `process_identity`, `process_with_crop_and_scale`, `process_with_flip`.
+
+**momo-uvc** (2): `yuyv_to_uyvy_basic`, `yuyv_to_uyvy_multiple_macropixels`.
 
 **momo-pipeline** (13): `color_bar_frame_size`, `color_bar_frame_small`, `initial_state_is_stopped`, `set_config`, `update_output_transform`, `update_output_not_found`, `start_stop_lifecycle`, `start_without_config_fails`, `stop_when_stopped_fails`, `subscribe_preview` (waits 3s for JPEG frame), `uyvy_to_rgb_known_values`, `nearest_neighbor_scale_halves`, `encode_preview_produces_jpeg` (checks FFD8 magic bytes).
 

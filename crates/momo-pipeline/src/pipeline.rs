@@ -8,6 +8,8 @@ use momo_core::error::{Error, Result};
 use momo_core::types::{OutputTransform, PipelineState};
 use tokio::sync::broadcast;
 
+use momo_gpu::GpuProcessor;
+
 use crate::event::PipelineEvent;
 use crate::input::InputDriver;
 use crate::preview::encode_preview;
@@ -107,13 +109,22 @@ impl Pipeline {
             }
         });
 
-        // Preview encoding + FPS tracking
+        // Collect enabled output configs for per-output transform tasks
+        let output_configs: Vec<_> = config
+            .outputs
+            .iter()
+            .filter(|o| o.enabled)
+            .cloned()
+            .collect();
+
+        // Preview encoding + FPS tracking + per-output GPU transforms
         let preview_tx = self.preview_tx.clone();
         let event_tx = self.event_tx.clone();
         let preview_config = config.preview.clone();
         let preview_task = tokio::spawn(async move {
             let mut frame_count = 0u64;
             let mut last_fps_time = tokio::time::Instant::now();
+            let gpu = GpuProcessor::new();
 
             while let Some(frame) = bridge_rx.recv().await {
                 frame_count += 1;
@@ -125,6 +136,29 @@ impl Pipeline {
                     let _ = event_tx.send(PipelineEvent::FpsUpdate { fps });
                 }
 
+                // Per-output GPU transform
+                for output in &output_configs {
+                    let output_resolution = output.display_mode.resolution();
+                    match gpu.process(&frame, &output.transform, output_resolution) {
+                        Ok(_transformed) => {
+                            // TODO: send transformed frame to DeckLink output device
+                            tracing::trace!(
+                                output_id = %output.id,
+                                "transformed frame ready ({}x{})",
+                                output_resolution.width,
+                                output_resolution.height,
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                output_id = %output.id,
+                                "GPU transform failed: {e}"
+                            );
+                        }
+                    }
+                }
+
+                // Preview encode
                 let pc = preview_config.clone();
                 if let Ok(Ok(jpeg)) =
                     tokio::task::spawn_blocking(move || encode_preview(&frame, &pc)).await

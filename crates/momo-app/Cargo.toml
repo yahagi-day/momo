@@ -3,6 +3,12 @@ name = "momo-app"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+decklink = ["momo-pipeline/decklink"]
+uvc = ["momo-pipeline/uvc"]
+gpu = ["momo-pipeline/gpu"]
+
 [dependencies]
 momo-core = { workspace = true }
 momo-pipeline = { workspace = true }

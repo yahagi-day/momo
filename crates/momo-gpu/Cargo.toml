@@ -3,6 +3,11 @@ name = "momo-gpu"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+gpu = ["dep:cudarc"]
+
 [dependencies]
 momo-core = { workspace = true }
 tracing = { workspace = true }
+cudarc = { workspace = true, optional = true }
