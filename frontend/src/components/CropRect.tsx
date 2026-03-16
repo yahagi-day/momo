@@ -29,10 +29,10 @@ const CropRect: Component<Props> = (props) => {
     inputToPreview(props.crop, props.inputRes, props.previewRect)
   );
 
-  const startDrag = (e: MouseEvent) => {
+  const handleMouseDown = (e: MouseEvent) => {
+    if (!props.selected) return;
     e.preventDefault();
     e.stopPropagation();
-    props.onSelect();
 
     const startX = e.clientX;
     const startY = e.clientY;
@@ -129,8 +129,9 @@ const CropRect: Component<Props> = (props) => {
         height: `${pos().height}px`,
         "border-color": props.color,
         "background-color": `${props.color}22`,
+        cursor: props.selected ? 'move' : 'default',
       }}
-      onMouseDown={startDrag}
+      onMouseDown={handleMouseDown}
     >
       <div
         class="crop-label"

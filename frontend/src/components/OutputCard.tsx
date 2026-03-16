@@ -6,7 +6,7 @@ interface Props {
   output: OutputConfig;
   color: string;
   selected: boolean;
-  onUpdated: () => void;
+  onUpdated: () => Promise<void> | void;
   onSelectOutput: (id: string | null) => void;
   onCropChange: (id: string, crop: CropRegion) => void;
 }
@@ -14,26 +14,23 @@ interface Props {
 const OutputCard: Component<Props> = (props) => {
   const [flipH, setFlipH] = createSignal(props.output.transform.flip.horizontal);
   const [flipV, setFlipV] = createSignal(props.output.transform.flip.vertical);
-  const initCrop = props.output.transform.crop;
-  const [cropX, setCropX] = createSignal(initCrop?.x ?? 0);
-  const [cropY, setCropY] = createSignal(initCrop?.y ?? 0);
-  const [cropW, setCropW] = createSignal(initCrop?.width ?? 0);
-  const [cropH, setCropH] = createSignal(initCrop?.height ?? 0);
   const [error, setError] = createSignal('');
+  const [editing, setEditing] = createSignal(false);
 
-  const hasCrop = () => props.output.transform.crop != null;
+  // Crop is always read from props.output.transform.crop (single source of truth via App config signal)
+  const crop = () => props.output.transform.crop;
+  const hasCrop = () => crop() != null;
 
   const handleApply = async () => {
     try {
       setError('');
-      const crop: CropRegion | null = hasCrop()
-        ? { x: cropX(), y: cropY(), width: cropW(), height: cropH() }
-        : null;
       await updateOutput(props.output.id, {
-        crop,
+        crop: crop(),
         flip: { horizontal: flipH(), vertical: flipV() },
       });
-      props.onUpdated();
+      setEditing(false);
+      props.onSelectOutput(null);
+      await props.onUpdated();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
     }
@@ -41,10 +38,10 @@ const OutputCard: Component<Props> = (props) => {
 
   const handleEditCrop = () => {
     if (!hasCrop()) {
-      // Initialize crop to full frame — use a sensible default
       const defaultCrop: CropRegion = { x: 0, y: 0, width: 1920, height: 1080 };
       props.onCropChange(props.output.id, defaultCrop);
     }
+    setEditing(true);
     props.onSelectOutput(props.output.id);
   };
 
@@ -53,20 +50,24 @@ const OutputCard: Component<Props> = (props) => {
     updateOutput(props.output.id, {
       crop: null,
       flip: { horizontal: flipH(), vertical: flipV() },
-    }).then(() => {
-      props.onUpdated();
+    }).then(async () => {
+      setEditing(false);
       props.onSelectOutput(null);
+      await props.onUpdated();
     }).catch((e) => {
       setError(e instanceof Error ? e.message : 'Failed');
     });
   };
 
   const handleCropFieldChange = (field: 'x' | 'y' | 'width' | 'height', value: number) => {
-    // Align x and width to 2px boundary (UYVY constraint)
-    if (field === 'x') setCropX(Math.round(value / 2) * 2);
-    else if (field === 'y') setCropY(value);
-    else if (field === 'width') setCropW(Math.round(value / 2) * 2);
-    else if (field === 'height') setCropH(value);
+    const c = crop();
+    if (!c) return;
+    const updated = { ...c };
+    if (field === 'x') updated.x = Math.round(value / 2) * 2;
+    else if (field === 'y') updated.y = value;
+    else if (field === 'width') updated.width = Math.round(value / 2) * 2;
+    else if (field === 'height') updated.height = value;
+    props.onCropChange(props.output.id, updated);
   };
 
   return (
@@ -89,16 +90,16 @@ const OutputCard: Component<Props> = (props) => {
           <label>Crop:</label>
           <div class="crop-inputs">
             <label>X</label>
-            <input type="number" value={cropX()} step={2}
+            <input type="number" value={crop()!.x} step={2} disabled={!editing()}
               onInput={(e) => handleCropFieldChange('x', parseInt(e.target.value) || 0)} />
             <label>Y</label>
-            <input type="number" value={cropY()}
+            <input type="number" value={crop()!.y} disabled={!editing()}
               onInput={(e) => handleCropFieldChange('y', parseInt(e.target.value) || 0)} />
             <label>W</label>
-            <input type="number" value={cropW()} step={2}
+            <input type="number" value={crop()!.width} step={2} disabled={!editing()}
               onInput={(e) => handleCropFieldChange('width', parseInt(e.target.value) || 0)} />
             <label>H</label>
-            <input type="number" value={cropH()}
+            <input type="number" value={crop()!.height} disabled={!editing()}
               onInput={(e) => handleCropFieldChange('height', parseInt(e.target.value) || 0)} />
           </div>
         </div>
@@ -106,16 +107,20 @@ const OutputCard: Component<Props> = (props) => {
 
       <div style={{ "margin-top": "8px" }}>
         <div class="checkbox-row">
-          <input type="checkbox" checked={flipH()} onChange={(e) => setFlipH(e.target.checked)} />
+          <input type="checkbox" checked={flipH()} disabled={!editing()} onChange={(e) => setFlipH(e.target.checked)} />
           <label>Flip H</label>
-          <input type="checkbox" checked={flipV()} onChange={(e) => setFlipV(e.target.checked)} />
+          <input type="checkbox" checked={flipV()} disabled={!editing()} onChange={(e) => setFlipV(e.target.checked)} />
           <label>Flip V</label>
         </div>
         <div class="output-card-actions">
-          <button class="btn-action" onClick={handleApply}>Apply</button>
-          <button class="btn-action" onClick={handleEditCrop}>Edit Crop</button>
-          <Show when={hasCrop()}>
-            <button class="btn-action" onClick={handleClearCrop}>Clear Crop</button>
+          <Show when={editing()} fallback={
+            <button class="btn-action" onClick={handleEditCrop}>Edit Crop</button>
+          }>
+            <button class="btn-action" onClick={handleApply}>Apply</button>
+            <button class="btn-action" onClick={() => { setEditing(false); props.onSelectOutput(null); }}>Cancel</button>
+            <Show when={hasCrop()}>
+              <button class="btn-action" onClick={handleClearCrop}>Clear Crop</button>
+            </Show>
           </Show>
         </div>
       </div>

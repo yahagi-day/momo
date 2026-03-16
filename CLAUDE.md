@@ -192,11 +192,17 @@ WS     /ws/status                 → PipelineEvent JSON messages
 
 `frontend/` — SolidJS SPA with TypeScript. Uses `vite-plugin-singlefile` to produce a single HTML file for binary embedding. Dev proxy: `/api` → `:8080`, `/ws` → `ws://:8080`.
 
-**Components**: `App` (root, state management, WebSocket), `StatusBar` (state badge, FPS, start/stop), `InputPanel` (source label, MJPEG preview when running), `OutputList`/`OutputCard` (per-output flip controls with Apply), `PreviewImage` (img tag), `ConfigActions` (save/load buttons).
+**Components**: `App` (root, state management, WebSocket, single source of truth for config), `StatusBar` (state badge, FPS, start/stop), `InputPanel` (source label, MJPEG preview when running, hosts CropOverlay), `CropOverlay` (MJPEG preview + draggable/resizable crop rects per output, uses ResizeObserver + `object-fit: contain` coordinate mapping), `CropRect` (draggable/resizable crop rectangle with 8 handles, only interactive when `selected`), `OutputList`/`OutputCard` (per-output crop/flip editing with Edit Crop → Apply/Cancel flow), `PreviewImage` (img tag), `ConfigActions` (save/load buttons).
 
-**API client** (`src/api/client.ts`): `getStatus`, `getConfig`, `putConfig`, `updateOutput`, `saveConfig`, `loadConfig`, `startPipeline`, `stopPipeline`.
+**Crop editing flow**: OutputCard "Edit Crop" → sets `editing` state + `selectedOutputId` → CropOverlay shows handles on selected rect → drag/resize calls `onCropChange` → App updates config signal (single source of truth) → OutputCard reads crop from `props.output.transform.crop` (no local crop state) → "Apply" sends to backend → "Cancel" reverts. Number inputs in OutputCard also call `onCropChange` to stay in sync with overlay.
+
+**Coordinate utils** (`src/utils/coordinates.ts`): `inputToPreview()` / `previewToInput()` convert between input pixel coords and preview CSS coords. `DISPLAY_MODE_RESOLUTIONS` maps mode names to resolutions. `OUTPUT_COLORS` palette for per-output coloring.
+
+**API client** (`src/api/client.ts`): `getStatus`, `getConfig`, `putConfig`, `updateOutput`, `saveConfig`, `loadConfig`, `startPipeline`, `stopPipeline`. All requests use `cache: 'no-store'` to prevent stale GET responses after mutations.
 
 **WebSocket** (`src/api/websocket.ts`): auto-reconnect with 2s delay.
+
+**SolidJS patterns**: `OutputList` uses `<Index>` (not `<For>`) to track outputs by array index, preventing component recreation on config refresh. SolidJS `on*` event handlers are evaluated once at mount — conditional logic must be inside the handler, not in the JSX attribute expression.
 
 ## CI (GitHub Actions)
 

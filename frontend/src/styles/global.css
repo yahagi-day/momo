@@ -137,6 +137,12 @@ input, select {
   background: #0f3460;
   border-radius: 6px;
   padding: 12px;
+  transition: opacity 0.15s;
+}
+
+.output-card-busy {
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 .output-card h3 {

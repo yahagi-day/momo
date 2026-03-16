@@ -3,7 +3,7 @@ import type { Config, OutputTransform, StatusResponse } from './types';
 const BASE = '';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(BASE + url, init);
+  const resp = await fetch(BASE + url, { cache: 'no-store', ...init });
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({ error: resp.statusText }));
     throw new Error(body.error || resp.statusText);
