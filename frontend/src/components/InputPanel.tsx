@@ -1,13 +1,18 @@
 import { Component, Show, createSignal, createEffect } from 'solid-js';
-import type { InputSource, PipelineState, Config } from '../api/types';
+import type { InputSource, PipelineState, Config, OutputConfig, CropRegion } from '../api/types';
 import { putConfig } from '../api/client';
-import PreviewImage from './PreviewImage';
+import { getInputResolution } from '../utils/coordinates';
+import CropOverlay from './CropOverlay';
 
 interface Props {
   input: InputSource | null;
   config: Config | null;
   pipelineState: PipelineState;
   onUpdated: () => void;
+  outputs: OutputConfig[];
+  selectedOutputId: string | null;
+  onSelectOutput: (id: string | null) => void;
+  onCropChange: (id: string, crop: CropRegion) => void;
 }
 
 const InputPanel: Component<Props> = (props) => {
@@ -174,8 +179,15 @@ const InputPanel: Component<Props> = (props) => {
         </div>
       </Show>
 
-      <Show when={isRunning()}>
-        <PreviewImage src="/api/preview/input" alt="Input preview" />
+      <Show when={isRunning() && props.input}>
+        <CropOverlay
+          src="/api/preview/input"
+          outputs={props.outputs}
+          inputRes={getInputResolution(props.input!)}
+          selectedOutputId={props.selectedOutputId}
+          onSelectOutput={props.onSelectOutput}
+          onCropChange={props.onCropChange}
+        />
       </Show>
     </div>
   );

@@ -1,10 +1,14 @@
 import { Component, For } from 'solid-js';
-import type { OutputConfig } from '../api/types';
+import type { OutputConfig, CropRegion } from '../api/types';
+import { OUTPUT_COLORS } from '../utils/coordinates';
 import OutputCard from './OutputCard';
 
 interface Props {
   outputs: OutputConfig[];
   onUpdated: () => void;
+  selectedOutputId: string | null;
+  onSelectOutput: (id: string | null) => void;
+  onCropChange: (id: string, crop: CropRegion) => void;
 }
 
 const OutputList: Component<Props> = (props) => {
@@ -13,7 +17,16 @@ const OutputList: Component<Props> = (props) => {
       <h2>Outputs</h2>
       <div class="output-list">
         <For each={props.outputs}>
-          {(output) => <OutputCard output={output} onUpdated={props.onUpdated} />}
+          {(output, index) => (
+            <OutputCard
+              output={output}
+              color={OUTPUT_COLORS[index() % OUTPUT_COLORS.length]}
+              selected={props.selectedOutputId === output.id}
+              onUpdated={props.onUpdated}
+              onSelectOutput={props.onSelectOutput}
+              onCropChange={props.onCropChange}
+            />
+          )}
         </For>
       </div>
     </div>

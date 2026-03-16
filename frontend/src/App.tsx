@@ -1,5 +1,5 @@
 import { Component, createSignal, onMount, onCleanup } from 'solid-js';
-import type { Config, PipelineState } from './api/types';
+import type { Config, PipelineState, CropRegion } from './api/types';
 import { getStatus, getConfig, startPipeline, stopPipeline } from './api/client';
 import { connectWebSocket } from './api/websocket';
 import StatusBar from './components/StatusBar';
@@ -12,6 +12,7 @@ const App: Component = () => {
   const [fps, setFps] = createSignal(0);
   const [config, setConfig] = createSignal<Config | null>(null);
   const [error, setError] = createSignal('');
+  const [selectedOutputId, setSelectedOutputId] = createSignal<string | null>(null);
 
   const fetchState = async () => {
     try {
@@ -74,13 +75,37 @@ const App: Component = () => {
     }
   };
 
+  const handleCropChange = (id: string, crop: CropRegion) => {
+    const cfg = config();
+    if (!cfg) return;
+    const newOutputs = cfg.outputs.map((o) =>
+      o.id === id ? { ...o, transform: { ...o.transform, crop } } : o
+    );
+    setConfig({ ...cfg, outputs: newOutputs });
+  };
+
   return (
     <div class="app">
       <StatusBar state={state()} fps={fps()} onStart={handleStart} onStop={handleStop} />
       {error() && <div class="error-msg" style={{ "margin-bottom": "12px" }}>{error()}</div>}
       <div class="main-content">
-        <InputPanel input={config()?.input ?? null} config={config()} pipelineState={state()} onUpdated={fetchConfig} />
-        <OutputList outputs={config()?.outputs ?? []} onUpdated={fetchConfig} />
+        <InputPanel
+          input={config()?.input ?? null}
+          config={config()}
+          pipelineState={state()}
+          onUpdated={fetchConfig}
+          outputs={config()?.outputs ?? []}
+          selectedOutputId={selectedOutputId()}
+          onSelectOutput={setSelectedOutputId}
+          onCropChange={handleCropChange}
+        />
+        <OutputList
+          outputs={config()?.outputs ?? []}
+          onUpdated={fetchConfig}
+          selectedOutputId={selectedOutputId()}
+          onSelectOutput={setSelectedOutputId}
+          onCropChange={handleCropChange}
+        />
       </div>
       <ConfigActions onConfigLoaded={fetchConfig} />
     </div>
