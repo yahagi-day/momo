@@ -1,4 +1,4 @@
-import { Component, Show, createSignal, createEffect } from 'solid-js';
+import { Component, Show, createSignal } from 'solid-js';
 import type { OutputConfig, CropRegion } from '../api/types';
 import { updateOutput } from '../api/client';
 
@@ -14,24 +14,12 @@ interface Props {
 const OutputCard: Component<Props> = (props) => {
   const [flipH, setFlipH] = createSignal(props.output.transform.flip.horizontal);
   const [flipV, setFlipV] = createSignal(props.output.transform.flip.vertical);
-  const [cropX, setCropX] = createSignal(0);
-  const [cropY, setCropY] = createSignal(0);
-  const [cropW, setCropW] = createSignal(0);
-  const [cropH, setCropH] = createSignal(0);
+  const initCrop = props.output.transform.crop;
+  const [cropX, setCropX] = createSignal(initCrop?.x ?? 0);
+  const [cropY, setCropY] = createSignal(initCrop?.y ?? 0);
+  const [cropW, setCropW] = createSignal(initCrop?.width ?? 0);
+  const [cropH, setCropH] = createSignal(initCrop?.height ?? 0);
   const [error, setError] = createSignal('');
-
-  // Sync local state from props (including overlay drag changes)
-  createEffect(() => {
-    setFlipH(props.output.transform.flip.horizontal);
-    setFlipV(props.output.transform.flip.vertical);
-    const crop = props.output.transform.crop;
-    if (crop) {
-      setCropX(crop.x);
-      setCropY(crop.y);
-      setCropW(crop.width);
-      setCropH(crop.height);
-    }
-  });
 
   const hasCrop = () => props.output.transform.crop != null;
 
@@ -61,14 +49,6 @@ const OutputCard: Component<Props> = (props) => {
   };
 
   const handleClearCrop = () => {
-    // Set crop to null by updating the config locally
-    // We update via onCropChange with a special flow — clear locally
-    const cfg = props.output;
-    // We need a way to clear crop. Use updateOutput directly is for Apply.
-    // For local clearing, we set the transform.crop to null via parent callback.
-    // Since onCropChange always sets a CropRegion, we handle clear differently:
-    // We'll modify the output in parent by calling onUpdated after clearing.
-    // Simplest: just apply null crop immediately to backend.
     setError('');
     updateOutput(props.output.id, {
       crop: null,
@@ -82,16 +62,11 @@ const OutputCard: Component<Props> = (props) => {
   };
 
   const handleCropFieldChange = (field: 'x' | 'y' | 'width' | 'height', value: number) => {
-    const crop: CropRegion = {
-      x: field === 'x' ? value : cropX(),
-      y: field === 'y' ? value : cropY(),
-      width: field === 'width' ? value : cropW(),
-      height: field === 'height' ? value : cropH(),
-    };
-    // Align x and width to 2px
-    if (field === 'x') crop.x = Math.round(value / 2) * 2;
-    if (field === 'width') crop.width = Math.round(value / 2) * 2;
-    props.onCropChange(props.output.id, crop);
+    // Align x and width to 2px boundary (UYVY constraint)
+    if (field === 'x') setCropX(Math.round(value / 2) * 2);
+    else if (field === 'y') setCropY(value);
+    else if (field === 'width') setCropW(Math.round(value / 2) * 2);
+    else if (field === 'height') setCropH(value);
   };
 
   return (
