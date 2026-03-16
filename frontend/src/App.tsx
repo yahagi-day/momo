@@ -79,7 +79,7 @@ const App: Component = () => {
       <StatusBar state={state()} fps={fps()} onStart={handleStart} onStop={handleStop} />
       {error() && <div class="error-msg" style={{ "margin-bottom": "12px" }}>{error()}</div>}
       <div class="main-content">
-        <InputPanel input={config()?.input ?? null} pipelineState={state()} />
+        <InputPanel input={config()?.input ?? null} config={config()} pipelineState={state()} onUpdated={fetchConfig} />
         <OutputList outputs={config()?.outputs ?? []} onUpdated={fetchConfig} />
       </div>
       <ConfigActions onConfigLoaded={fetchConfig} />

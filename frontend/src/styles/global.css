@@ -176,3 +176,33 @@ input, select {
 .checkbox-row input[type="checkbox"] {
   width: auto;
 }
+
+.input-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.input-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input-form-row label {
+  min-width: 70px;
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+.input-form-row input,
+.input-form-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-form-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
