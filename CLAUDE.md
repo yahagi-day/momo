@@ -48,7 +48,7 @@ momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode,
 
 **Threading model**: Mock/hardware input runs on a dedicated OS thread. A bridge task (`tokio::task::spawn_blocking`) forwards frames from `crossbeam-channel` to `tokio::sync::mpsc` (100ms recv timeout). Preview encoding and FPS tracking run as a single tokio task. Web/API runs on the tokio async runtime.
 
-**Frame flow**: Input thread → crossbeam channel (bounded 4) → bridge task → tokio mpsc (bounded 2) → [per-output: GpuProcessor::process() crop→scale→flip → DeckLink output (TODO)] + [preview task (UYVY→RGB→scale→JPEG via `spawn_blocking`) → `broadcast::Sender<Vec<u8>>` (capacity 4) → MJPEG endpoint].
+**Frame flow**: Input thread → crossbeam channel (bounded 4) → bridge task → tokio mpsc (bounded 2) → [per-output: GpuProcessor::process() crop→scale→flip → DeckLink output (feature-gated) + per-output preview broadcast channel] + [input preview task (UYVY→RGB→scale→JPEG via `spawn_blocking`) → `broadcast::Sender<Vec<u8>>` (capacity 4) → MJPEG endpoint].
 
 **Event flow**: Pipeline state changes and FPS updates → `broadcast::Sender<PipelineEvent>` (capacity 64) → WebSocket handler forwards as JSON.
 
@@ -63,13 +63,13 @@ momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode,
 | momo-core | **Complete** | All types, config, error, frame |
 | momo-decklink | **Working** | cxx FFI bridge, feature-gated (`--features decklink`). Input capture, output, device enumeration. Stub without feature. |
 | momo-uvc | **Working** | Feature-gated (`--features uvc`). nokhwa capture, YUYV→UYVY conversion. Stub without feature. |
-| momo-gpu | **Working** | CPU fallback: crop/scale/flip for UYVY. CUDA feature-gated (`--features gpu`). |
-| momo-pipeline | **Working** | Mock input, preview encode, FPS tracking |
-| momo-web | **Working** | All endpoints, WebSocket, MJPEG, embedded UI |
+| momo-gpu | **Working** | CUDA kernels (crop/scale/flip) with CPU fallback. PTX compiled at build time by nvcc. Feature-gated (`--features gpu`). |
+| momo-pipeline | **Working** | Mock input, preview encode, FPS tracking, per-output preview, DeckLink output integration (feature-gated) |
+| momo-web | **Working** | All endpoints, WebSocket, MJPEG input+output preview, embedded UI |
 | momo-app | **Working** | CLI, config loading, default config generation |
 | frontend | **Working** | SolidJS SPA + vanilla JS fallback |
 
-**Next steps**: CUDA kernel optimization (replace CPU fallback with `cudarc`), DeckLink output integration (send transformed frames to output devices).
+**Next steps**: Rotation support (90°/180°/270°), CUDA kernel optimization (persistent device buffers, parallel CUDA streams per output), DeckLink hot-unplug handling.
 
 ## Workspace Dependencies
 
@@ -83,7 +83,7 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"                                                    # ws feature added in momo-web
 crossbeam-channel = "0.5"
 cxx = "1"
-cudarc = { version = "0.16", optional = true }
+cudarc = { version = "0.16", features = ["driver", "cuda-version-from-build-system"], optional = true }
 nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 clap = { version = "4", features = ["derive"] }
 tower-http = { version = "0.6", features = ["cors"] }
@@ -94,6 +94,8 @@ async-stream = "0.3"
 Dev dependencies (momo-web only): `tower = "0.5"` (util), `http-body-util = "0.1"` for endpoint testing via `tower::ServiceExt::oneshot`.
 
 Build dependencies (momo-decklink): `cxx-build = "1"` for compiling C++ bridge code when `decklink` feature is enabled.
+
+Build dependencies (momo-gpu): `build.rs` compiles `.cu` kernels to PTX via `nvcc` when `gpu` feature is enabled. Requires CUDA Toolkit.
 
 ## Key Types
 
@@ -126,9 +128,11 @@ Build dependencies (momo-decklink): `cxx-build = "1"` for compiling C++ bridge c
 ### momo-gpu
 
 - **Feature flag**: `gpu` — enables CUDA via `cudarc`. Default OFF (CPU fallback). Propagates: `momo-app/gpu` → `momo-pipeline/gpu` → `momo-gpu/gpu`.
-- **`GpuProcessor`** — `new()`, `process(&Frame, &OutputTransform, Resolution) -> Result<Frame>`. Uses CPU fallback when CUDA unavailable.
+- **`GpuProcessor`** — `new()`, `process(&Frame, &OutputTransform, Resolution) -> Result<Frame>`. With `gpu` feature + CUDA available: uses GPU kernels. Otherwise: CPU fallback. Graceful degradation if CUDA init fails.
+- **`cuda`** module (feature-gated) — `CudaProcessor`: loads pre-compiled PTX (from `build.rs`/nvcc), provides `crop_uyvy()`, `scale_uyvy()`, `flip_uyvy()` via cudarc. Uses `CudaContext` + `CudaStream` + `launch_builder` API.
 - **`transform`** module — CPU implementations: `crop_uyvy()` (2-pixel aligned), `scale_uyvy_nearest()` (macro-pixel aware), `flip_uyvy()` (horizontal swaps Y0/Y1 within macro-pixel).
-- **`is_cuda_available()`** — with `gpu` feature: attempts `CudaDevice::new(0)`. Without: returns false.
+- **`is_cuda_available()`** — with `gpu` feature: attempts `CudaContext::new(0)`. Without: returns false.
+- **CUDA kernels** (`kernels/`): `crop.cu` (per-pixel), `scale.cu` (per-macro-pixel nearest-neighbor), `flip.cu` (per-macro-pixel with Y0/Y1 swap for horizontal). Compiled to PTX by `build.rs` via nvcc.
 
 ### momo-uvc
 
@@ -139,7 +143,9 @@ Build dependencies (momo-decklink): `cxx-build = "1"` for compiling C++ bridge c
 
 ### momo-pipeline
 
-- **`Pipeline`** — fields: `state`, `config: Option<Config>`, `config_path: Option<PathBuf>`, `event_tx: broadcast::Sender<PipelineEvent>`, `preview_tx: broadcast::Sender<Vec<u8>>`, `running: Option<RunningState>`. Methods: `new()`, `state()`, `config()`, `subscribe()`, `subscribe_preview()`, `set_config()`, `set_config_path()`, `start()`, `stop()`, `save_config()`, `load_config()`, `update_output()`, `outputs()`.
+- **`Pipeline`** — fields: `state`, `config: Option<Config>`, `config_path: Option<PathBuf>`, `event_tx: broadcast::Sender<PipelineEvent>`, `preview_tx: broadcast::Sender<Vec<u8>>`, `output_preview_txs: HashMap<String, broadcast::Sender<Vec<u8>>>`, `running: Option<RunningState>`. Methods: `new()`, `state()`, `config()`, `subscribe()`, `subscribe_preview()`, `subscribe_output_preview(id)`, `set_config()`, `set_config_path()`, `start()`, `stop()`, `save_config()`, `load_config()`, `update_output()`, `outputs()`.
+- **Per-output preview**: `start()` creates per-output broadcast channels. Frame loop encodes output previews throttled at `PreviewConfig.fps`, skipping encode when `receiver_count() == 0`. Channels cleared on `stop()`.
+- **DeckLink output** (feature-gated): `start()` creates and starts `DeckLinkOutput` per enabled output. Frame loop calls `VideoOutput::send_frame()` after GPU transform. Outputs stopped gracefully on task completion.
 - **`PipelineEvent`** — `StateChanged { state }`, `FpsUpdate { fps: f64 }`, `DeviceEvent { device, status }`, `ConfigChanged`, `Error { message }`. Serialized as tagged JSON.
 - **`InputDriver`** — enum: `Mock(MockInput)`, `DeckLink(DeckLinkInput)` (feature-gated), `Uvc(UvcInput)` (feature-gated). Factory: `from_config(&InputSource)`.
 - **`MockInput`** — generates UYVY color bars (SMPTE 8-bar pattern: White/Yellow/Cyan/Green/Magenta/Red/Blue/Black). Runs on dedicated OS thread at configured FPS. Stop via `Arc<AtomicBool>`.
@@ -170,11 +176,11 @@ POST   /api/config/save           → { status: "ok" } (saves to config_path)
 POST   /api/config/load           → { status: "ok" } (body: { path: "..." })
 GET    /api/devices               → DeviceInfo[] (currently empty)
 GET    /api/preview/input         → multipart/x-mixed-replace MJPEG stream
-GET    /api/preview/output/{id}   → 501 Not Implemented (stub)
+GET    /api/preview/output/{id}   → multipart/x-mixed-replace MJPEG stream | 404
 WS     /ws/status                 → PipelineEvent JSON messages
 ```
 
-## Tests (49 total)
+## Tests (52 total)
 
 **momo-core** (7): `config_serde_roundtrip`, `config_file_roundtrip`, `config_rejects_empty_outputs`, `config_rejects_duplicate_ids`, `config_rejects_zero_crop`, `config_defaults_applied`, `input_source_uvc_roundtrip`.
 
@@ -184,15 +190,15 @@ WS     /ws/status                 → PipelineEvent JSON messages
 
 **momo-uvc** (2): `yuyv_to_uyvy_basic`, `yuyv_to_uyvy_multiple_macropixels`.
 
-**momo-pipeline** (13): `color_bar_frame_size`, `color_bar_frame_small`, `initial_state_is_stopped`, `set_config`, `update_output_transform`, `update_output_not_found`, `start_stop_lifecycle`, `start_without_config_fails`, `stop_when_stopped_fails`, `subscribe_preview` (waits 3s for JPEG frame), `uyvy_to_rgb_known_values`, `nearest_neighbor_scale_halves`, `encode_preview_produces_jpeg` (checks FFD8 magic bytes).
+**momo-pipeline** (14): `color_bar_frame_size`, `color_bar_frame_small`, `initial_state_is_stopped`, `set_config`, `update_output_transform`, `update_output_not_found`, `start_stop_lifecycle`, `start_without_config_fails`, `stop_when_stopped_fails`, `subscribe_preview` (waits 3s for JPEG frame), `subscribe_output_preview_lifecycle`, `uyvy_to_rgb_known_values`, `nearest_neighbor_scale_halves`, `encode_preview_produces_jpeg` (checks FFD8 magic bytes).
 
-**momo-web** (10): `get_status_returns_stopped`, `get_config_returns_config`, `get_config_no_config_returns_400`, `put_config_sets_config`, `get_devices_returns_array`, `start_stop_pipeline`, `stop_when_stopped_returns_conflict`, `preview_output_returns_501`, `preview_input_returns_mjpeg_content_type`, `update_output_transform`.
+**momo-web** (11): `get_status_returns_stopped`, `get_config_returns_config`, `get_config_no_config_returns_400`, `put_config_sets_config`, `get_devices_returns_array`, `start_stop_pipeline`, `stop_when_stopped_returns_conflict`, `preview_output_returns_404_when_stopped`, `preview_output_returns_mjpeg_when_running`, `preview_input_returns_mjpeg_content_type`, `update_output_transform`.
 
 ## Frontend (SolidJS + Vite)
 
 `frontend/` — SolidJS SPA with TypeScript. Uses `vite-plugin-singlefile` to produce a single HTML file for binary embedding. Dev proxy: `/api` → `:8080`, `/ws` → `ws://:8080`.
 
-**Components**: `App` (root, state management, WebSocket, single source of truth for config), `StatusBar` (state badge, FPS, start/stop), `InputPanel` (source label, MJPEG preview when running, hosts CropOverlay), `CropOverlay` (MJPEG preview + draggable/resizable crop rects per output, uses ResizeObserver + `object-fit: contain` coordinate mapping), `CropRect` (draggable/resizable crop rectangle with 8 handles, only interactive when `selected`), `OutputList`/`OutputCard` (per-output crop/flip editing with Edit Crop → Apply/Cancel flow), `PreviewImage` (img tag), `ConfigActions` (save/load buttons).
+**Components**: `App` (root, state management, WebSocket, single source of truth for config), `StatusBar` (state badge, FPS, start/stop), `InputPanel` (source label, MJPEG preview when running, hosts CropOverlay), `CropOverlay` (MJPEG preview + draggable/resizable crop rects per output, uses ResizeObserver + `object-fit: contain` coordinate mapping), `CropRect` (draggable/resizable crop rectangle with 8 handles, only interactive when `selected`), `OutputList`/`OutputCard` (per-output crop/flip editing with Edit Crop → Apply/Cancel flow, live output preview thumbnail when pipeline running), `PreviewImage` (img tag), `ConfigActions` (save/load buttons).
 
 **Crop editing flow**: OutputCard "Edit Crop" → sets `editing` state + `selectedOutputId` → CropOverlay shows handles on selected rect → drag/resize calls `onCropChange` → App updates config signal (single source of truth) → OutputCard reads crop from `props.output.transform.crop` (no local crop state) → "Apply" sends to backend → "Cancel" reverts. Number inputs in OutputCard also call `onCropChange` to stay in sync with overlay.
 
@@ -219,7 +225,7 @@ Frontend is built BEFORE cargo so that `build.rs` can embed `frontend/dist/index
 - Must handle DeckLink hot-unplug gracefully (no crash, status reflected in UI)
 - Cross-platform: Ubuntu and Windows
 - GPU: CUDA via `cudarc`, targeting GTX 1080+
-- DeckLink/CUDA/UVC are currently stubs — all tests must pass without hardware
+- DeckLink/CUDA/UVC are feature-gated — all tests must pass without hardware (default build). With `--features gpu,decklink`, tests pass with graceful fallback (DeckLink output warns if no hardware; CUDA uses GPU if available, CPU otherwise)
 - When `--config` file doesn't exist, a default Mock input config is generated automatically
 - Config uses apply-button paradigm — changes are explicit, not auto-applied
 

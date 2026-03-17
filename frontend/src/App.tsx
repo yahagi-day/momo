@@ -134,6 +134,7 @@ const App: Component = () => {
           selectedOutputId={selectedOutputId()}
           onSelectOutput={setSelectedOutputId}
           onCropChange={handleCropChange}
+          pipelineRunning={isRunning()}
         />
       </div>
 

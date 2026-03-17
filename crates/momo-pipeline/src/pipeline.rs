@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -20,6 +21,7 @@ pub struct Pipeline {
     config_path: Option<PathBuf>,
     event_tx: broadcast::Sender<PipelineEvent>,
     preview_tx: broadcast::Sender<Vec<u8>>,
+    output_preview_txs: HashMap<String, broadcast::Sender<Vec<u8>>>,
     running: Option<RunningState>,
 }
 
@@ -40,6 +42,7 @@ impl Pipeline {
             config_path: None,
             event_tx,
             preview_tx,
+            output_preview_txs: HashMap::new(),
             running: None,
         }
     }
@@ -58,6 +61,10 @@ impl Pipeline {
 
     pub fn subscribe_preview(&self) -> broadcast::Receiver<Vec<u8>> {
         self.preview_tx.subscribe()
+    }
+
+    pub fn subscribe_output_preview(&self, id: &str) -> Option<broadcast::Receiver<Vec<u8>>> {
+        self.output_preview_txs.get(id).map(|tx| tx.subscribe())
     }
 
     pub fn set_config(&mut self, config: Config) -> Result<()> {
@@ -117,7 +124,43 @@ impl Pipeline {
             .cloned()
             .collect();
 
-        // Preview encoding + FPS tracking + per-output GPU transforms
+        // Create per-output preview channels
+        let mut output_preview_txs_map = HashMap::new();
+        let mut output_preview_txs_task = HashMap::new();
+        for output in &output_configs {
+            let (tx, _) = broadcast::channel(4);
+            output_preview_txs_task.insert(output.id.clone(), tx.clone());
+            output_preview_txs_map.insert(output.id.clone(), tx);
+        }
+        self.output_preview_txs = output_preview_txs_map;
+
+        // Create and start DeckLink outputs (feature-gated)
+        #[cfg(feature = "decklink")]
+        let mut output_players: HashMap<String, momo_decklink::output::DeckLinkOutput> = {
+            let mut players = HashMap::new();
+            for output in &output_configs {
+                let mut player = momo_decklink::output::DeckLinkOutput::new(
+                    output.device_index,
+                    output.display_mode,
+                    output.pixel_format,
+                );
+                match momo_decklink::VideoOutput::start(&mut player) {
+                    Ok(()) => {
+                        tracing::info!(output_id = %output.id, "DeckLink output started");
+                        players.insert(output.id.clone(), player);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            output_id = %output.id,
+                            "Failed to start DeckLink output: {e}"
+                        );
+                    }
+                }
+            }
+            players
+        };
+
+        // Preview encoding + FPS tracking + per-output GPU transforms + DeckLink output
         let preview_tx = self.preview_tx.clone();
         let event_tx = self.event_tx.clone();
         let preview_config = config.preview.clone();
@@ -125,6 +168,10 @@ impl Pipeline {
             let mut frame_count = 0u64;
             let mut last_fps_time = tokio::time::Instant::now();
             let gpu = GpuProcessor::new();
+            let preview_interval = Duration::from_secs_f64(1.0 / preview_config.fps as f64);
+            let mut last_output_preview_time = tokio::time::Instant::now()
+                .checked_sub(preview_interval)
+                .unwrap_or_else(tokio::time::Instant::now);
 
             while let Some(frame) = bridge_rx.recv().await {
                 frame_count += 1;
@@ -136,18 +183,53 @@ impl Pipeline {
                     let _ = event_tx.send(PipelineEvent::FpsUpdate { fps });
                 }
 
-                // Per-output GPU transform
+                let now = tokio::time::Instant::now();
+                let should_encode_output_preview =
+                    now.duration_since(last_output_preview_time) >= preview_interval;
+
+                // Per-output GPU transform + DeckLink output
                 for output in &output_configs {
                     let output_resolution = output.display_mode.resolution();
                     match gpu.process(&frame, &output.transform, output_resolution) {
-                        Ok(_transformed) => {
-                            // TODO: send transformed frame to DeckLink output device
+                        Ok(transformed) => {
+                            // Send transformed frame to DeckLink output device
+                            #[cfg(feature = "decklink")]
+                            {
+                                if let Some(player) = output_players.get_mut(&output.id) {
+                                    if let Err(e) =
+                                        momo_decklink::VideoOutput::send_frame(player, &transformed)
+                                    {
+                                        tracing::warn!(
+                                            output_id = %output.id,
+                                            "DeckLink output error: {e}"
+                                        );
+                                    }
+                                }
+                            }
+
                             tracing::trace!(
                                 output_id = %output.id,
                                 "transformed frame ready ({}x{})",
                                 output_resolution.width,
                                 output_resolution.height,
                             );
+
+                            // Encode output preview if throttle allows and someone is listening
+                            if should_encode_output_preview {
+                                if let Some(tx) = output_preview_txs_task.get(&output.id) {
+                                    if tx.receiver_count() > 0 {
+                                        let pc = preview_config.clone();
+                                        if let Ok(Ok(jpeg)) =
+                                            tokio::task::spawn_blocking(move || {
+                                                encode_preview(&transformed, &pc)
+                                            })
+                                            .await
+                                        {
+                                            let _ = tx.send(jpeg);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -158,6 +240,10 @@ impl Pipeline {
                     }
                 }
 
+                if should_encode_output_preview {
+                    last_output_preview_time = now;
+                }
+
                 // Preview encode
                 let pc = preview_config.clone();
                 if let Ok(Ok(jpeg)) =
@@ -165,6 +251,12 @@ impl Pipeline {
                 {
                     let _ = preview_tx.send(jpeg);
                 }
+            }
+
+            // Graceful shutdown: stop DeckLink outputs
+            #[cfg(feature = "decklink")]
+            for (_id, player) in output_players.iter_mut() {
+                let _ = momo_decklink::VideoOutput::stop(player);
             }
         });
 
@@ -195,6 +287,7 @@ impl Pipeline {
             running.bridge_task.abort();
         }
 
+        self.output_preview_txs.clear();
         self.state = PipelineState::Stopped;
         self.emit(PipelineEvent::StateChanged { state: self.state });
 
@@ -354,6 +447,27 @@ mod tests {
     fn stop_when_stopped_fails() {
         let mut pipeline = Pipeline::new();
         assert!(pipeline.stop().is_err());
+    }
+
+    #[tokio::test]
+    async fn subscribe_output_preview_lifecycle() {
+        let mut pipeline = Pipeline::new();
+        pipeline.set_config(mock_config()).unwrap();
+
+        // Before start: None
+        assert!(pipeline.subscribe_output_preview("out1").is_none());
+
+        pipeline.start().unwrap();
+
+        // After start: Some
+        assert!(pipeline.subscribe_output_preview("out1").is_some());
+        // Unknown id: None
+        assert!(pipeline.subscribe_output_preview("nonexistent").is_none());
+
+        pipeline.stop().unwrap();
+
+        // After stop: None
+        assert!(pipeline.subscribe_output_preview("out1").is_none());
     }
 
     #[tokio::test]

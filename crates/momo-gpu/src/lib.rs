@@ -5,6 +5,8 @@
 //! When the `gpu` feature is enabled, CUDA kernels are used.
 //! Otherwise, CPU fallback implementations are provided.
 
+#[cfg(feature = "gpu")]
+pub mod cuda;
 pub mod processor;
 pub mod transform;
 
@@ -14,10 +16,7 @@ pub use processor::GpuProcessor;
 pub fn is_cuda_available() -> bool {
     #[cfg(feature = "gpu")]
     {
-        match cudarc::driver::CudaDevice::new(0) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        cudarc::driver::CudaContext::new(0).is_ok()
     }
     #[cfg(not(feature = "gpu"))]
     {

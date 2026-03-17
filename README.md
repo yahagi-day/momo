@@ -27,7 +27,10 @@ Live video splitter/router that captures a single video input (DeckLink / UVC / 
 ## Build & Run
 
 ```bash
-cargo build                          # build all crates
+cargo build                          # build all crates (CPU fallback)
+cargo build --features gpu           # build with CUDA GPU processing (requires CUDA Toolkit)
+cargo build --features decklink      # build with DeckLink hardware support (requires DeckLink SDK)
+cargo build --features gpu,decklink  # build with all hardware features
 cargo run                            # start server (default: 0.0.0.0:8080)
 cargo run -- --config path.json --port 9090
 cargo test                           # run all tests
@@ -111,7 +114,7 @@ GET    /api/status               Pipeline state
 POST   /api/pipeline/start       Start pipeline
 POST   /api/pipeline/stop        Stop pipeline
 GET    /api/preview/input        Input MJPEG stream
-GET    /api/preview/output/:id   Output MJPEG stream (stub)
+GET    /api/preview/output/:id   Per-output MJPEG stream (transformed)
 WS     /ws/status                WebSocket: state changes, FPS, device events
 ```
 
@@ -119,7 +122,7 @@ WS     /ws/status                WebSocket: state changes, FPS, device events
 
 - **Status bar**: pipeline state, FPS display, start/stop control
 - **Input panel**: source info + live MJPEG preview
-- **Output cards**: per-output transform settings (crop, flip) with apply button
+- **Output cards**: per-output transform settings (crop, flip) with apply button + live output preview thumbnail
 - **Config actions**: save/load configuration files
 - **Real-time updates**: WebSocket-driven state and FPS
 

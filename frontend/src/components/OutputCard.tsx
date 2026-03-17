@@ -9,6 +9,7 @@ interface Props {
   onUpdated: () => Promise<void> | void;
   onSelectOutput: (id: string | null) => void;
   onCropChange: (id: string, crop: CropRegion) => void;
+  pipelineRunning: boolean;
 }
 
 const OutputCard: Component<Props> = (props) => {
@@ -88,6 +89,12 @@ const OutputCard: Component<Props> = (props) => {
         <label>Dev</label>
         <span>#{props.output.device_index}</span>
       </div>
+
+      <Show when={props.pipelineRunning}>
+        <div class="output-preview">
+          <img src={`/api/preview/output/${props.output.id}`} alt={`${props.output.name} preview`} />
+        </div>
+      </Show>
 
       <Show when={hasCrop()}>
         <div class="crop-fields">
