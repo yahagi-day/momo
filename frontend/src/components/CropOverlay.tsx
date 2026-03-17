@@ -32,6 +32,7 @@ const CropOverlay: Component<Props> = (props) => {
   });
 
   const handleContainerClick = (e: MouseEvent) => {
+    if (props.selectedOutputId) return;
     if (e.target === containerRef || (e.target as HTMLElement).tagName === 'IMG') {
       props.onSelectOutput(null);
     }

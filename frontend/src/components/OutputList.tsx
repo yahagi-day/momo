@@ -13,7 +13,7 @@ interface Props {
 
 const OutputList: Component<Props> = (props) => {
   return (
-    <div class="panel">
+    <div class="panel joycon-right">
       <h2>Outputs</h2>
       <div class="output-list">
         <Index each={props.outputs}>
