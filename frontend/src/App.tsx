@@ -139,7 +139,7 @@ const App: Component = () => {
 
       <div class="bottom-bar">
         <div class="waveform-footer">
-          <Waveform height={64} />
+          <Waveform height={64} src={isRunning() ? '/api/preview/input' : undefined} />
         </div>
         <ConfigActions onConfigLoaded={fetchConfig} />
       </div>

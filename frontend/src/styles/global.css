@@ -99,13 +99,6 @@ body {
   z-index: 1;
 }
 
-.status-bar .waveform-mini {
-  flex: 1;
-  max-width: 400px;
-  margin: 0 24px;
-  opacity: 0.8;
-}
-
 .status-bar .info {
   display: flex;
   align-items: center;
@@ -696,8 +689,5 @@ input:focus, select:focus {
   }
   .panel.joycon-right {
     border-top-color: var(--joy-blue);
-  }
-  .status-bar .waveform-mini {
-    display: none;
   }
 }
