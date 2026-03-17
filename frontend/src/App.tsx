@@ -1,4 +1,4 @@
-import { Component, createSignal, onMount, onCleanup } from 'solid-js';
+import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
 import type { Config, PipelineState, CropRegion } from './api/types';
 import { getStatus, getConfig, startPipeline, stopPipeline } from './api/client';
 import { connectWebSocket } from './api/websocket';
@@ -6,6 +6,9 @@ import StatusBar from './components/StatusBar';
 import InputPanel from './components/InputPanel';
 import OutputList from './components/OutputList';
 import ConfigActions from './components/ConfigActions';
+import Waveform from './components/Waveform';
+import CropOverlay from './components/CropOverlay';
+import { getInputResolution } from './utils/coordinates';
 
 const App: Component = () => {
   const [state, setState] = createSignal<PipelineState>('Stopped');
@@ -84,11 +87,16 @@ const App: Component = () => {
     setConfig({ ...cfg, outputs: newOutputs });
   };
 
+  const isRunning = () => state() === 'Running';
+
   return (
     <div class="app">
       <StatusBar state={state()} fps={fps()} onStart={handleStart} onStop={handleStop} />
-      {error() && <div class="error-msg" style={{ "margin-bottom": "12px" }}>{error()}</div>}
+
+      {error() && <div class="error-msg" style={{ padding: "0 8px" }}>{error()}</div>}
+
       <div class="main-content">
+        {/* Left Joy-Con: Input Controls */}
         <InputPanel
           input={config()?.input ?? null}
           config={config()}
@@ -99,6 +107,27 @@ const App: Component = () => {
           onSelectOutput={setSelectedOutputId}
           onCropChange={handleCropChange}
         />
+
+        {/* Center: Main Screen */}
+        <div class="panel screen-panel">
+          <div class="screen-content">
+            <span class="screen-label">Preview</span>
+            <Show when={isRunning() && config()?.input} fallback={
+              <span class="screen-placeholder">Standby</span>
+            }>
+              <CropOverlay
+                src="/api/preview/input"
+                outputs={config()?.outputs ?? []}
+                inputRes={getInputResolution(config()!.input)}
+                selectedOutputId={selectedOutputId()}
+                onSelectOutput={setSelectedOutputId}
+                onCropChange={handleCropChange}
+              />
+            </Show>
+          </div>
+        </div>
+
+        {/* Right Joy-Con: Outputs */}
         <OutputList
           outputs={config()?.outputs ?? []}
           onUpdated={fetchConfig}
@@ -107,7 +136,13 @@ const App: Component = () => {
           onCropChange={handleCropChange}
         />
       </div>
-      <ConfigActions onConfigLoaded={fetchConfig} />
+
+      <div class="bottom-bar">
+        <div class="waveform-footer">
+          <Waveform height={64} />
+        </div>
+        <ConfigActions onConfigLoaded={fetchConfig} />
+      </div>
     </div>
   );
 };

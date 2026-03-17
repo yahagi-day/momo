@@ -1,8 +1,6 @@
 import { Component, Show, createSignal, createEffect } from 'solid-js';
 import type { InputSource, PipelineState, Config, OutputConfig, CropRegion } from '../api/types';
 import { putConfig } from '../api/client';
-import { getInputResolution } from '../utils/coordinates';
-import CropOverlay from './CropOverlay';
 
 interface Props {
   input: InputSource | null;
@@ -27,7 +25,6 @@ const InputPanel: Component<Props> = (props) => {
   const [error, setError] = createSignal('');
   const [editing, setEditing] = createSignal(false);
 
-  // Sync form state from current config
   createEffect(() => {
     const src = props.input;
     if (!src) return;
@@ -53,9 +50,9 @@ const InputPanel: Component<Props> = (props) => {
     const src = props.input;
     if (!src) return 'Not configured';
     switch (src.type) {
-      case 'Mock': return `Mock (${src.width}x${src.height} @ ${src.fps}fps)`;
+      case 'Mock': return `Mock ${src.width}x${src.height} @ ${src.fps}fps`;
       case 'DeckLink': return `DeckLink #${src.device_index}`;
-      case 'Uvc': return `UVC (${src.device_path})`;
+      case 'Uvc': return `UVC ${src.device_path}`;
     }
   };
 
@@ -96,14 +93,13 @@ const InputPanel: Component<Props> = (props) => {
   ];
 
   return (
-    <div class="panel">
+    <div class="panel joycon-left">
       <h2>Input</h2>
+
       <Show when={!editing()}>
-        <p style={{ "margin-bottom": "12px", "font-size": "0.9rem", color: "#aaa" }}>
-          {inputLabel()}
-        </p>
+        <div class="input-info">{inputLabel()}</div>
         <Show when={!isRunning() && props.config}>
-          <button class="btn-action" onClick={() => setEditing(true)}>
+          <button class="btn-action accent-red" onClick={() => setEditing(true)}>
             Change Input
           </button>
         </Show>
@@ -112,7 +108,7 @@ const InputPanel: Component<Props> = (props) => {
       <Show when={editing()}>
         <div class="input-form">
           <div class="input-form-row">
-            <label>Type:</label>
+            <label>Type</label>
             <select
               value={inputType()}
               onChange={(e) => setInputType(e.target.value as 'Mock' | 'DeckLink' | 'Uvc')}
@@ -125,32 +121,32 @@ const InputPanel: Component<Props> = (props) => {
 
           <Show when={inputType() === 'Mock'}>
             <div class="input-form-row">
-              <label>Width:</label>
+              <label>Width</label>
               <input type="number" value={mockWidth()} onInput={(e) => setMockWidth(parseInt(e.target.value) || 0)} />
             </div>
             <div class="input-form-row">
-              <label>Height:</label>
+              <label>Height</label>
               <input type="number" value={mockHeight()} onInput={(e) => setMockHeight(parseInt(e.target.value) || 0)} />
             </div>
             <div class="input-form-row">
-              <label>FPS:</label>
+              <label>FPS</label>
               <input type="number" value={mockFps()} onInput={(e) => setMockFps(parseInt(e.target.value) || 0)} />
             </div>
           </Show>
 
           <Show when={inputType() === 'DeckLink'}>
             <div class="input-form-row">
-              <label>Device #:</label>
+              <label>Device</label>
               <input type="number" value={dlIndex()} onInput={(e) => setDlIndex(parseInt(e.target.value) || 0)} />
             </div>
             <div class="input-form-row">
-              <label>Mode:</label>
+              <label>Mode</label>
               <select value={dlMode()} onChange={(e) => setDlMode(e.target.value)}>
                 {DISPLAY_MODES.map((m) => <option value={m}>{m}</option>)}
               </select>
             </div>
             <div class="input-form-row">
-              <label>Format:</label>
+              <label>Format</label>
               <select value={dlFormat()} onChange={(e) => setDlFormat(e.target.value)}>
                 <option value="Uyvy">UYVY</option>
                 <option value="Bgra">BGRA</option>
@@ -161,7 +157,7 @@ const InputPanel: Component<Props> = (props) => {
 
           <Show when={inputType() === 'Uvc'}>
             <div class="input-form-row">
-              <label>Device:</label>
+              <label>Device</label>
               <input
                 type="text"
                 value={uvcPath()}
@@ -172,22 +168,11 @@ const InputPanel: Component<Props> = (props) => {
           </Show>
 
           <div class="input-form-buttons">
-            <button class="btn-action" onClick={handleApply}>Apply</button>
+            <button class="btn-action accent-red" onClick={handleApply}>Apply</button>
             <button class="btn-action" onClick={() => { setEditing(false); setError(''); }}>Cancel</button>
           </div>
           {error() && <div class="error-msg">{error()}</div>}
         </div>
-      </Show>
-
-      <Show when={isRunning() && props.input}>
-        <CropOverlay
-          src="/api/preview/input"
-          outputs={props.outputs}
-          inputRes={getInputResolution(props.input!)}
-          selectedOutputId={props.selectedOutputId}
-          onSelectOutput={props.onSelectOutput}
-          onCropChange={props.onCropChange}
-        />
       </Show>
     </div>
   );

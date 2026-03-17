@@ -40,7 +40,7 @@ const ConfigActions: Component<Props> = (props) => {
     <div class="config-actions">
       <button class="btn-action" onClick={handleSave}>Save Config</button>
       <button class="btn-action" onClick={handleLoad}>Load Config</button>
-      {message() && <span style={{ color: '#6c6', "font-size": "0.85rem" }}>{message()}</span>}
+      {message() && <span style={{ color: 'var(--joy-green)', "font-size": "0.82rem" }}>{message()}</span>}
       {error() && <span class="error-msg">{error()}</span>}
     </div>
   );

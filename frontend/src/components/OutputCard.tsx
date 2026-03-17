@@ -17,7 +17,6 @@ const OutputCard: Component<Props> = (props) => {
   const [error, setError] = createSignal('');
   const [editing, setEditing] = createSignal(false);
 
-  // Crop is always read from props.output.transform.crop (single source of truth via App config signal)
   const crop = () => props.output.transform.crop;
   const hasCrop = () => crop() != null;
 
@@ -72,22 +71,27 @@ const OutputCard: Component<Props> = (props) => {
 
   return (
     <div
-      class="output-card"
-      style={{ "border-left": `3px solid ${props.color}` }}
+      class={`output-card${props.selected ? ' selected' : ''}`}
+      style={{ "--card-color": props.color } as any}
     >
-      <h3>{props.output.name} ({props.output.id})</h3>
+      <div style={{
+        position: "absolute", top: 0, left: 0,
+        width: "4px", height: "100%",
+        background: props.color, "border-radius": "2px"
+      }} />
+      <h3>{props.output.name} <span style={{ color: "var(--text-muted)", "font-weight": "400" }}>({props.output.id})</span></h3>
       <div class="fields">
-        <label>Mode:</label>
+        <label>Mode</label>
         <span>{props.output.display_mode}</span>
-        <label>Format:</label>
+        <label>Fmt</label>
         <span>{props.output.pixel_format}</span>
-        <label>Device:</label>
+        <label>Dev</label>
         <span>#{props.output.device_index}</span>
       </div>
 
       <Show when={hasCrop()}>
         <div class="crop-fields">
-          <label>Crop:</label>
+          <label>Crop</label>
           <div class="crop-inputs">
             <label>X</label>
             <input type="number" value={crop()!.x} step={2} disabled={!editing()}
@@ -114,12 +118,12 @@ const OutputCard: Component<Props> = (props) => {
         </div>
         <div class="output-card-actions">
           <Show when={editing()} fallback={
-            <button class="btn-action" onClick={handleEditCrop}>Edit Crop</button>
+            <button class="btn-action accent-blue" onClick={handleEditCrop}>Edit Crop</button>
           }>
-            <button class="btn-action" onClick={handleApply}>Apply</button>
+            <button class="btn-action accent-blue" onClick={handleApply}>Apply</button>
             <button class="btn-action" onClick={() => { setEditing(false); props.onSelectOutput(null); }}>Cancel</button>
             <Show when={hasCrop()}>
-              <button class="btn-action" onClick={handleClearCrop}>Clear Crop</button>
+              <button class="btn-action accent-red" onClick={handleClearCrop}>Clear</button>
             </Show>
           </Show>
         </div>

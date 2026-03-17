@@ -1,5 +1,6 @@
-import { Component } from 'solid-js';
+import { Component, Show } from 'solid-js';
 import type { PipelineState } from '../api/types';
+import Waveform from './Waveform';
 
 interface Props {
   state: PipelineState;
@@ -14,9 +15,14 @@ const StatusBar: Component<Props> = (props) => {
 
   return (
     <div class="status-bar">
-      <h1>MOMO</h1>
+      <span class="logo">MOMO</span>
+
+      <Waveform height={32} className="waveform waveform-mini" />
+
       <div class="info">
-        {isRunning() && <span>{props.fps.toFixed(1)} fps</span>}
+        <Show when={isRunning()}>
+          <span class="fps-display">{props.fps.toFixed(1)} fps</span>
+        </Show>
         <span class={`status-badge ${props.state.toLowerCase()}`}>{props.state}</span>
         {isRunning() ? (
           <button class="btn-stop" onClick={props.onStop} disabled={isBusy()}>
