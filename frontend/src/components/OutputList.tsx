@@ -9,6 +9,7 @@ interface Props {
   selectedOutputId: string | null;
   onSelectOutput: (id: string | null) => void;
   onCropChange: (id: string, crop: CropRegion) => void;
+  pipelineRunning: boolean;
 }
 
 const OutputList: Component<Props> = (props) => {
@@ -25,6 +26,7 @@ const OutputList: Component<Props> = (props) => {
               onUpdated={props.onUpdated}
               onSelectOutput={props.onSelectOutput}
               onCropChange={props.onCropChange}
+              pipelineRunning={props.pipelineRunning}
             />
           )}
         </Index>

@@ -99,13 +99,6 @@ body {
   z-index: 1;
 }
 
-.status-bar .waveform-mini {
-  flex: 1;
-  max-width: 400px;
-  margin: 0 24px;
-  opacity: 0.8;
-}
-
 .status-bar .info {
   display: flex;
   align-items: center;
@@ -621,6 +614,22 @@ input:focus, select:focus {
   letter-spacing: 0.06em;
 }
 
+.output-preview {
+  margin-top: 8px;
+  padding-left: 12px;
+  aspect-ratio: 16 / 9;
+  background: var(--bg-deep);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.output-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .output-card-actions {
   display: flex;
   gap: 6px;
@@ -696,8 +705,5 @@ input:focus, select:focus {
   }
   .panel.joycon-right {
     border-top-color: var(--joy-blue);
-  }
-  .status-bar .waveform-mini {
-    display: none;
   }
 }

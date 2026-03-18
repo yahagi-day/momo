@@ -1,15 +1,59 @@
 #include "decklink_bridge.h"
 #include "momo-decklink/src/ffi.rs.h"
+
+#ifdef _WIN32
+#include <combaseapi.h>
+#include "DeckLinkAPI_h.h"
+#else
 #include "DeckLinkAPI.h"
+#endif
 
 #include <cstring>
 #include <chrono>
 
-// External functions from DeckLinkAPIDispatch.cpp
+// --- Platform helpers ---
+
+#ifdef _WIN32
+
+static IDeckLinkIterator* CreateDeckLinkIteratorInstance() {
+    IDeckLinkIterator* iter = nullptr;
+    HRESULT hr = CoCreateInstance(
+        CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL,
+        IID_IDeckLinkIterator, (void**)&iter);
+    return SUCCEEDED(hr) ? iter : nullptr;
+}
+
+static bool IsDeckLinkAPIPresent() {
+    IDeckLinkIterator* iter = CreateDeckLinkIteratorInstance();
+    if (iter) { iter->Release(); return true; }
+    return false;
+}
+
+static rust::String decklink_string_to_rust(BSTR bstr) {
+    if (!bstr) return rust::String("Unknown");
+    int len = WideCharToMultiByte(CP_UTF8, 0, bstr, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return rust::String("Unknown");
+    std::string utf8(len - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, bstr, -1, &utf8[0], len, nullptr, nullptr);
+    return rust::String(utf8);
+}
+
+#else
+
+// Linux: functions provided by DeckLinkAPIDispatch.cpp
 extern "C" {
     IDeckLinkIterator* CreateDeckLinkIteratorInstance(void);
     bool IsDeckLinkAPIPresent(void);
 }
+
+static rust::String decklink_string_to_rust(const char* str) {
+    if (!str) return rust::String("Unknown");
+    rust::String result(str);
+    free(const_cast<char*>(str));
+    return result;
+}
+
+#endif
 
 namespace momo {
 
@@ -25,10 +69,18 @@ public:
         return E_NOINTERFACE;
     }
     ULONG STDMETHODCALLTYPE AddRef() override {
+#ifdef _WIN32
+        return InterlockedIncrement(&ref_count_);
+#else
         return __sync_add_and_fetch(&ref_count_, 1);
+#endif
     }
     ULONG STDMETHODCALLTYPE Release() override {
+#ifdef _WIN32
+        LONG count = InterlockedDecrement(&ref_count_);
+#else
         ULONG count = __sync_sub_and_fetch(&ref_count_, 1);
+#endif
         if (count == 0) delete this;
         return count;
     }
@@ -76,19 +128,29 @@ public:
 
 private:
     DeckLinkInputCapture* owner_;
+#ifdef _WIN32
+    LONG ref_count_;
+#else
     ULONG ref_count_;
+#endif
 };
 
 // --- DeckLinkSystem ---
 
 DeckLinkSystem::DeckLinkSystem() {
-    // CreateDeckLinkIteratorInstance triggers dlopen internally
+#ifdef _WIN32
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+#endif
     IDeckLinkIterator* iter = CreateDeckLinkIteratorInstance();
     api_present_ = (iter != nullptr);
     if (iter) iter->Release();
 }
 
-DeckLinkSystem::~DeckLinkSystem() {}
+DeckLinkSystem::~DeckLinkSystem() {
+#ifdef _WIN32
+    CoUninitialize();
+#endif
+}
 
 bool DeckLinkSystem::is_api_present() const {
     return api_present_;
@@ -107,21 +169,37 @@ rust::Vec<BridgeDeviceInfo> DeckLinkSystem::enumerate() const {
         BridgeDeviceInfo info;
         info.index = index;
 
+#ifdef _WIN32
+        BSTR displayName = nullptr;
+        if (deckLink->GetDisplayName(&displayName) == S_OK) {
+            info.name = decklink_string_to_rust(displayName);
+            SysFreeString(displayName);
+        } else {
+            info.name = rust::String("Unknown");
+        }
+
+        BSTR modelName = nullptr;
+        if (deckLink->GetModelName(&modelName) == S_OK) {
+            info.model_name = decklink_string_to_rust(modelName);
+            SysFreeString(modelName);
+        } else {
+            info.model_name = rust::String("Unknown");
+        }
+#else
         const char* displayName = nullptr;
         if (deckLink->GetDisplayName(&displayName) == S_OK && displayName) {
-            info.name = rust::String(displayName);
-            free(const_cast<char*>(displayName));
+            info.name = decklink_string_to_rust(displayName);
         } else {
             info.name = rust::String("Unknown");
         }
 
         const char* modelName = nullptr;
         if (deckLink->GetModelName(&modelName) == S_OK && modelName) {
-            info.model_name = rust::String(modelName);
-            free(const_cast<char*>(modelName));
+            info.model_name = decklink_string_to_rust(modelName);
         } else {
             info.model_name = rust::String("Unknown");
         }
+#endif
 
         // Check for input capability
         IDeckLinkInput* input = nullptr;

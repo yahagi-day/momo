@@ -1,5 +1,5 @@
-// Scale kernel — bilinear scaling of a UYVY frame.
-// Stub: to be implemented in Phase 2.
+// Scale kernel — nearest-neighbor scaling of a UYVY frame.
+// Works at macro-pixel (4 bytes = 2 pixels) granularity to preserve chroma pairing.
 
 extern "C" __global__ void scale_uyvy(
     const unsigned char* __restrict__ src,
@@ -9,21 +9,23 @@ extern "C" __global__ void scale_uyvy(
     int dst_width,
     int dst_height
 ) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    // Each thread handles one macro-pixel (2 pixels) in the destination
+    int mx = blockIdx.x * blockDim.x + threadIdx.x;
+    int y  = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (x < dst_width && y < dst_height) {
-        // Nearest-neighbor placeholder — bilinear to follow
-        float src_x = (float)x * src_width / dst_width;
-        float src_y = (float)y * src_height / dst_height;
-        int sx = (int)src_x;
-        int sy = (int)src_y;
-        if (sx >= src_width) sx = src_width - 1;
-        if (sy >= src_height) sy = src_height - 1;
+    int dst_macro_w = dst_width / 2;
+    int src_macro_w = src_width / 2;
 
-        int src_offset = (sy * src_width + sx) * 2;
-        int dst_offset = (y * dst_width + x) * 2;
-        dst[dst_offset]     = src[src_offset];
-        dst[dst_offset + 1] = src[src_offset + 1];
+    if (mx < dst_macro_w && y < dst_height) {
+        int sy  = (int)((long long)y  * src_height / dst_height);
+        int smx = (int)((long long)mx * src_macro_w / dst_macro_w);
+
+        int src_offset = sy * src_width * 2 + smx * 4;
+        int dst_offset = y  * dst_width * 2 + mx  * 4;
+
+        dst[dst_offset]     = src[src_offset];     // U
+        dst[dst_offset + 1] = src[src_offset + 1]; // Y0
+        dst[dst_offset + 2] = src[src_offset + 2]; // V
+        dst[dst_offset + 3] = src[src_offset + 3]; // Y1
     }
 }

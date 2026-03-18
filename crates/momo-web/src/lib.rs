@@ -167,14 +167,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preview_output_returns_501() {
+    async fn preview_output_returns_404_when_stopped() {
         let app = build_router(test_state());
         let req = Request::get("/api/preview/output/out1")
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
 
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn preview_output_returns_mjpeg_when_running() {
+        let state = test_state();
+        {
+            let mut pipeline = state.pipeline.write().await;
+            pipeline.start().unwrap();
+        }
+
+        let app = build_router(state.clone());
+        let req = Request::get("/api/preview/output/out1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp.headers().get("content-type").unwrap().to_str().unwrap();
+        assert!(content_type.contains("multipart/x-mixed-replace"));
+
+        {
+            let mut pipeline = state.pipeline.write().await;
+            pipeline.stop().unwrap();
+        }
     }
 
     #[tokio::test]

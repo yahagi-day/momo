@@ -134,12 +134,13 @@ const App: Component = () => {
           selectedOutputId={selectedOutputId()}
           onSelectOutput={setSelectedOutputId}
           onCropChange={handleCropChange}
+          pipelineRunning={isRunning()}
         />
       </div>
 
       <div class="bottom-bar">
         <div class="waveform-footer">
-          <Waveform height={64} />
+          <Waveform height={64} src={isRunning() ? '/api/preview/input' : undefined} />
         </div>
         <ConfigActions onConfigLoaded={fetchConfig} />
       </div>
