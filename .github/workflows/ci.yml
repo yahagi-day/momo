@@ -45,6 +45,7 @@ jobs:
 
   build-linux:
     needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     container:
       image: nvidia/cuda:12.6.3-devel-ubuntu24.04
@@ -86,6 +87,7 @@ jobs:
 
   build-windows:
     needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
