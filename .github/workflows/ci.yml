@@ -34,16 +34,17 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build (default)
+      - name: Build
         run: cargo build --workspace
 
-      - name: Clippy (default)
+      - name: Clippy
         run: cargo clippy --workspace -- -D warnings
 
-      - name: Test (default)
+      - name: Test
         run: cargo test --workspace
 
-  check-gpu-decklink:
+  build-linux:
+    needs: check
     runs-on: ubuntu-latest
     container:
       image: nvidia/cuda:12.6.3-devel-ubuntu24.04
@@ -68,37 +69,39 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build (gpu + decklink)
-        run: $HOME/.cargo/bin/cargo build --workspace --features gpu,decklink
-
       - name: Clippy (gpu + decklink)
         run: $HOME/.cargo/bin/cargo clippy --workspace --features gpu,decklink -- -D warnings
 
       - name: Test (gpu + decklink)
         run: $HOME/.cargo/bin/cargo test --workspace --features gpu,decklink
 
-  build:
+      - name: Build release (gpu + decklink)
+        run: $HOME/.cargo/bin/cargo build --release --features gpu,decklink
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: momo-linux-x86_64
+          path: target/release/momo-app
+
+  build-windows:
     needs: check
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: momo-linux-x86_64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: momo-windows-x86_64
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: x86_64-pc-windows-msvc
+
+      - uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.6.3'
+          method: network
 
       - uses: actions/setup-node@v4
         with:
@@ -112,19 +115,11 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build release (gpu + decklink)
+        run: cargo build --release --target x86_64-pc-windows-msvc --features gpu,decklink
 
-      - name: Upload artifact (Linux)
-        if: runner.os == 'Linux'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/momo-app
-
-      - name: Upload artifact (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/momo-app.exe
+          name: momo-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/momo-app.exe
