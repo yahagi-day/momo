@@ -103,6 +103,8 @@ jobs:
           cuda: '12.6.3'
           method: network
 
+      - uses: ilammy/msvc-dev-cmd@v1
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
