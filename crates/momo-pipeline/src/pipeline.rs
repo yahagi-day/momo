@@ -30,6 +30,7 @@ struct RunningState {
     _input_thread: std::thread::JoinHandle<()>,
     bridge_task: tokio::task::JoinHandle<()>,
     preview_task: tokio::task::JoinHandle<()>,
+    output_configs_tx: tokio::sync::watch::Sender<Vec<OutputConfig>>,
 }
 
 impl Pipeline {
@@ -116,13 +117,15 @@ impl Pipeline {
             }
         });
 
-        // Collect enabled output configs for per-output transform tasks
+        // Collect enabled output configs, shared via watch channel for live updates
         let output_configs: Vec<_> = config
             .outputs
             .iter()
             .filter(|o| o.enabled)
             .cloned()
             .collect();
+        let (output_configs_tx, output_configs_rx) =
+            tokio::sync::watch::channel(output_configs.clone());
 
         // Create per-output preview channels
         let mut output_preview_txs_map = HashMap::new();
@@ -187,8 +190,11 @@ impl Pipeline {
                 let should_encode_output_preview =
                     now.duration_since(last_output_preview_time) >= preview_interval;
 
+                // Read latest output configs (updated via watch channel on crop/transform changes)
+                let current_outputs = output_configs_rx.borrow().clone();
+
                 // Per-output GPU transform + DeckLink output
-                for output in &output_configs {
+                for output in &current_outputs {
                     let output_resolution = output.display_mode.resolution();
                     match gpu.process(&frame, &output.transform, output_resolution) {
                         Ok(transformed) => {
@@ -265,6 +271,7 @@ impl Pipeline {
             _input_thread: input_thread,
             bridge_task,
             preview_task,
+            output_configs_tx,
         });
 
         self.state = PipelineState::Running;
@@ -325,6 +332,18 @@ impl Pipeline {
             .find(|o| o.id == id)
             .ok_or_else(|| Error::DeviceNotFound(format!("output '{id}' not found")))?;
         output.transform = transform;
+
+        // Propagate to running frame loop via watch channel
+        if let Some(ref running) = self.running {
+            let updated: Vec<_> = config
+                .outputs
+                .iter()
+                .filter(|o| o.enabled)
+                .cloned()
+                .collect();
+            let _ = running.output_configs_tx.send(updated);
+        }
+
         self.emit(PipelineEvent::ConfigChanged);
         Ok(())
     }
