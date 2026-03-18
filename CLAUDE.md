@@ -93,7 +93,7 @@ async-stream = "0.3"
 
 Dev dependencies (momo-web only): `tower = "0.5"` (util), `http-body-util = "0.1"` for endpoint testing via `tower::ServiceExt::oneshot`.
 
-Build dependencies (momo-decklink): `cxx-build = "1"` for compiling C++ bridge code when `decklink` feature is enabled.
+Build dependencies (momo-decklink): `cxx-build = "1"` for compiling C++ bridge code when `decklink` feature is enabled. On Windows, also requires MSVC (`midl.exe`) for IDL compilation.
 
 Build dependencies (momo-gpu): `build.rs` compiles `.cu` kernels to PTX via `nvcc` when `gpu` feature is enabled. Requires CUDA Toolkit.
 
@@ -115,15 +115,17 @@ Build dependencies (momo-gpu): `build.rs` compiles `.cu` kernels to PTX via `nvc
 ### momo-decklink
 
 - **Feature flag**: `decklink` — enables C++ FFI via `cxx`. Default OFF (stub only). Propagates: `momo-app/decklink` → `momo-pipeline/decklink` → `momo-decklink/decklink`.
+- **Cross-platform build** (`build.rs`): Linux uses `DeckLinkAPIDispatch.cpp` (dlopen) + SDK headers from `sdk/include/`. Windows uses `midl.exe` to generate C++ headers from IDL files in `sdk/include/win/`, links `ole32`/`oleaut32`.
+- **SDK headers** (`sdk/include/`): Committed to git. Per EULA Section 0, Include headers are exempt from redistribution restrictions (Clauses 1, 4.3, 4.4, 5, 7, 8 do not apply). Windows IDL files in `sdk/include/win/` also committed. Other SDK files (samples, docs) are gitignored.
 - **`DeckLinkDevice`** — `index: u32`, `name: String`, `model_name: String`, `has_input: bool`, `has_output: bool`, `status: DeviceStatus`.
 - **`VideoInput`** trait (Send) — `start()`, `stop()`, `is_capturing()`.
 - **`VideoOutput`** trait (Send) — `start()`, `stop()`, `send_frame(&Frame)`.
-- **`enumerate_devices()`** — with `decklink` feature: queries hardware via `DeckLinkAPIDispatch.cpp` (dlopen). Without: returns empty Vec.
+- **`enumerate_devices()`** — with `decklink` feature: queries hardware via COM. Without: returns empty Vec.
 - **`conversions`** module — `DisplayMode` ↔ BMDDisplayMode (`u32`) and `PixelFormat` ↔ BMDPixelFormat (`u32`) conversions.
 - **`ffi`** module (feature-gated) — `cxx::bridge` to C++ `DeckLinkSystem`, `DeckLinkInputCapture`, `DeckLinkOutputPlayer`.
 - **`input::DeckLinkInput`** (feature-gated) — captures frames on dedicated OS thread via callback → mutex/CV → `get_frame()` polling loop → crossbeam channel.
 - **`output::DeckLinkOutput`** (feature-gated) — implements `VideoOutput`, uses `DisplayVideoFrameSync` with 3-frame pool.
-- **C++ bridge** (`cpp/decklink_bridge.cpp`) — wraps COM interfaces: `IDeckLinkIterator`, `IDeckLinkInput`+`IDeckLinkInputCallback`, `IDeckLinkOutput`+`IDeckLinkMutableVideoFrame`.
+- **C++ bridge** (`cpp/decklink_bridge.cpp`) — wraps COM interfaces: `IDeckLinkIterator`, `IDeckLinkInput`+`IDeckLinkInputCallback`, `IDeckLinkOutput`+`IDeckLinkMutableVideoFrame`. Platform-specific `#ifdef _WIN32` blocks for COM init, BSTR handling, WideCharToMultiByte.
 
 ### momo-gpu
 
@@ -180,7 +182,7 @@ GET    /api/preview/output/{id}   → multipart/x-mixed-replace MJPEG stream | 4
 WS     /ws/status                 → PipelineEvent JSON messages
 ```
 
-## Tests (52 total)
+## Tests (51 total)
 
 **momo-core** (7): `config_serde_roundtrip`, `config_file_roundtrip`, `config_rejects_empty_outputs`, `config_rejects_duplicate_ids`, `config_rejects_zero_crop`, `config_defaults_applied`, `input_source_uvc_roundtrip`.
 
@@ -190,7 +192,7 @@ WS     /ws/status                 → PipelineEvent JSON messages
 
 **momo-uvc** (2): `yuyv_to_uyvy_basic`, `yuyv_to_uyvy_multiple_macropixels`.
 
-**momo-pipeline** (14): `color_bar_frame_size`, `color_bar_frame_small`, `initial_state_is_stopped`, `set_config`, `update_output_transform`, `update_output_not_found`, `start_stop_lifecycle`, `start_without_config_fails`, `stop_when_stopped_fails`, `subscribe_preview` (waits 3s for JPEG frame), `subscribe_output_preview_lifecycle`, `uyvy_to_rgb_known_values`, `nearest_neighbor_scale_halves`, `encode_preview_produces_jpeg` (checks FFD8 magic bytes).
+**momo-pipeline** (14): `color_bar_frame_size`, `color_bar_frame_small` (mock_input), `initial_state_is_stopped`, `set_config`, `update_output_transform`, `update_output_not_found`, `start_stop_lifecycle`, `start_without_config_fails`, `stop_when_stopped_fails`, `subscribe_preview` (waits 3s for JPEG frame), `subscribe_output_preview_lifecycle` (pipeline), `uyvy_to_rgb_known_values`, `nearest_neighbor_scale_halves`, `encode_preview_produces_jpeg` (preview).
 
 **momo-web** (11): `get_status_returns_stopped`, `get_config_returns_config`, `get_config_no_config_returns_400`, `put_config_sets_config`, `get_devices_returns_array`, `start_stop_pipeline`, `stop_when_stopped_returns_conflict`, `preview_output_returns_404_when_stopped`, `preview_output_returns_mjpeg_when_running`, `preview_input_returns_mjpeg_content_type`, `update_output_transform`.
 
@@ -212,18 +214,18 @@ WS     /ws/status                 → PipelineEvent JSON messages
 
 ## CI (GitHub Actions)
 
-**check** job (ubuntu): Node 22 → `npm install && npm run build` → `cargo build` → `cargo clippy -- -D warnings` → `cargo test`.
+**check** job (ubuntu): Node 22 → `npm install && npm run build` → `cargo build` → `cargo clippy -- -D warnings` → `cargo test` (no hardware features).
 
-**check-gpu-decklink** job (nvidia/cuda container): CUDA 12.6 + Rust + Node → frontend build → `cargo build/clippy/test --features gpu,decklink`.
+**build-linux** job (nvidia/cuda:12.6 container, needs check): Rust + Node → frontend build → `cargo clippy/test/build --release --features gpu,decklink` → upload `momo-linux-x86_64` artifact.
 
-**build** job (matrix: ubuntu + windows): same frontend build → `cargo build --release --target` → upload artifact (`momo-app` / `momo-app.exe`).
+**build-windows** job (windows-latest, needs check): MSVC + CUDA 12.6 + Node → frontend build → `cargo build --release --target x86_64-pc-windows-msvc --features gpu,decklink` → upload `momo-windows-x86_64` artifact.
 
 Frontend is built BEFORE cargo so that `build.rs` can embed `frontend/dist/index.html` into the binary.
 
 ## Key Constraints
 
 - Live/broadcast use — low latency is critical, no allocations in hot path
-- DeckLink SDK is C++; access via `cxx` crate FFI bindings (not bindgen)
+- DeckLink SDK is C++; access via `cxx` crate FFI bindings (not bindgen). Linux: dlopen via DeckLinkAPIDispatch. Windows: COM via midl-generated headers
 - Must handle DeckLink hot-unplug gracefully (no crash, status reflected in UI)
 - Cross-platform: Ubuntu and Windows
 - GPU: CUDA via `cudarc`, targeting GTX 1080+
