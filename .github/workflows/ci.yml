@@ -34,14 +34,48 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build
+      - name: Build (default)
         run: cargo build --workspace
 
-      - name: Clippy
+      - name: Clippy (default)
         run: cargo clippy --workspace -- -D warnings
 
-      - name: Test
+      - name: Test (default)
         run: cargo test --workspace
+
+  check-gpu-decklink:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.6.3-devel-ubuntu24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential pkg-config nodejs npm
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable -c clippy
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Frontend install
+        working-directory: frontend
+        run: npm install
+
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Build (gpu + decklink)
+        run: $HOME/.cargo/bin/cargo build --workspace --features gpu,decklink
+
+      - name: Clippy (gpu + decklink)
+        run: $HOME/.cargo/bin/cargo clippy --workspace --features gpu,decklink -- -D warnings
+
+      - name: Test (gpu + decklink)
+        run: $HOME/.cargo/bin/cargo test --workspace --features gpu,decklink
 
   build:
     needs: check

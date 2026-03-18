@@ -214,6 +214,8 @@ WS     /ws/status                 → PipelineEvent JSON messages
 
 **check** job (ubuntu): Node 22 → `npm install && npm run build` → `cargo build` → `cargo clippy -- -D warnings` → `cargo test`.
 
+**check-gpu-decklink** job (nvidia/cuda container): CUDA 12.6 + Rust + Node → frontend build → `cargo build/clippy/test --features gpu,decklink`.
+
 **build** job (matrix: ubuntu + windows): same frontend build → `cargo build --release --target` → upload artifact (`momo-app` / `momo-app.exe`).
 
 Frontend is built BEFORE cargo so that `build.rs` can embed `frontend/dist/index.html` into the binary.
