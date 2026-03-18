@@ -1,4 +1,4 @@
-import type { Config, OutputTransform, StatusResponse } from './types';
+import type { Config, DeviceInfo, OutputTransform, StatusResponse } from './types';
 
 const BASE = '';
 
@@ -53,4 +53,8 @@ export async function startPipeline(): Promise<void> {
 
 export async function stopPipeline(): Promise<void> {
   await request('/api/pipeline/stop', { method: 'POST' });
+}
+
+export async function getDevices(): Promise<DeviceInfo[]> {
+  return request('/api/devices');
 }
