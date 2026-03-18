@@ -16,7 +16,7 @@ pub use processor::GpuProcessor;
 pub fn is_cuda_available() -> bool {
     #[cfg(feature = "gpu")]
     {
-        cudarc::driver::CudaContext::new(0).is_ok()
+        std::panic::catch_unwind(|| cudarc::driver::CudaContext::new(0).is_ok()).unwrap_or(false)
     }
     #[cfg(not(feature = "gpu"))]
     {

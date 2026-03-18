@@ -17,16 +17,19 @@ impl GpuProcessor {
     pub fn new() -> Self {
         #[cfg(feature = "gpu")]
         {
-            match crate::cuda::CudaProcessor::new() {
-                Ok(ctx) => {
+            match std::panic::catch_unwind(crate::cuda::CudaProcessor::new) {
+                Ok(Ok(ctx)) => {
                     tracing::info!("CUDA GPU processing enabled");
-                    Self { cuda: Some(ctx) }
+                    return Self { cuda: Some(ctx) };
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!("CUDA not available, using CPU fallback: {e}");
-                    Self { cuda: None }
+                }
+                Err(_) => {
+                    tracing::warn!("CUDA driver not found, using CPU fallback");
                 }
             }
+            return Self { cuda: None };
         }
         #[cfg(not(feature = "gpu"))]
         {
