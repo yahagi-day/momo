@@ -1,6 +1,6 @@
 import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
-import type { Config, PipelineState, CropRegion } from './api/types';
-import { getStatus, getConfig, startPipeline, stopPipeline } from './api/client';
+import type { Config, PipelineState, CropRegion, OutputConfig } from './api/types';
+import { getStatus, getConfig, putConfig, startPipeline, stopPipeline } from './api/client';
 import { connectWebSocket } from './api/websocket';
 import StatusBar from './components/StatusBar';
 import InputPanel from './components/InputPanel';
@@ -87,6 +87,22 @@ const App: Component = () => {
     setConfig({ ...cfg, outputs: newOutputs });
   };
 
+  const handleAddOutput = async (output: OutputConfig) => {
+    const cfg = config();
+    if (!cfg) return;
+    const newConfig: Config = { ...cfg, outputs: [...cfg.outputs, output] };
+    await putConfig(newConfig);
+    await fetchConfig();
+  };
+
+  const handleRemoveOutput = async (id: string) => {
+    const cfg = config();
+    if (!cfg) return;
+    const newConfig: Config = { ...cfg, outputs: cfg.outputs.filter((o) => o.id !== id) };
+    await putConfig(newConfig);
+    await fetchConfig();
+  };
+
   const isRunning = () => state() === 'Running';
 
   return (
@@ -135,6 +151,8 @@ const App: Component = () => {
           onSelectOutput={setSelectedOutputId}
           onCropChange={handleCropChange}
           pipelineRunning={isRunning()}
+          onAddOutput={handleAddOutput}
+          onRemoveOutput={handleRemoveOutput}
         />
       </div>
 

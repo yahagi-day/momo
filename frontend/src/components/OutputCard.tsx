@@ -10,6 +10,7 @@ interface Props {
   onSelectOutput: (id: string | null) => void;
   onCropChange: (id: string, crop: CropRegion) => void;
   pipelineRunning: boolean;
+  onRemove?: (id: string) => void;
 }
 
 const OutputCard: Component<Props> = (props) => {
@@ -80,7 +81,16 @@ const OutputCard: Component<Props> = (props) => {
         width: "4px", height: "100%",
         background: props.color, "border-radius": "2px"
       }} />
-      <h3>{props.output.name} <span style={{ color: "var(--text-muted)", "font-weight": "400" }}>({props.output.id})</span></h3>
+      <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
+        <h3 style={{ margin: 0 }}>{props.output.name} <span style={{ color: "var(--text-muted)", "font-weight": "400" }}>({props.output.id})</span></h3>
+        <Show when={!props.pipelineRunning && props.onRemove}>
+          <button
+            class="btn-action accent-red"
+            style={{ padding: "2px 8px", "font-size": "0.75rem", "min-width": "auto" }}
+            onClick={() => props.onRemove?.(props.output.id)}
+          >Delete</button>
+        </Show>
+      </div>
       <div class="fields">
         <label>Mode</label>
         <span>{props.output.display_mode}</span>
