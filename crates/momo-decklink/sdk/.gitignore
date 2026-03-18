@@ -1,4 +1,6 @@
-# DeckLink SDK - do not commit (proprietary, download from Blackmagic Design)
+# DeckLink SDK - only headers committed (needed for CI builds)
 *
 !.gitignore
 !README.md
+!include/
+!include/**
