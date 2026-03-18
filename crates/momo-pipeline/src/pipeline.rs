@@ -135,7 +135,7 @@ impl Pipeline {
         self.output_preview_txs = output_preview_txs_map;
 
         // Create and start DeckLink outputs (feature-gated)
-        #[cfg(feature = "decklink")]
+        #[cfg(all(feature = "decklink", target_os = "linux"))]
         let mut output_players: HashMap<String, momo_decklink::output::DeckLinkOutput> = {
             let mut players = HashMap::new();
             for output in &output_configs {
@@ -193,7 +193,7 @@ impl Pipeline {
                     match gpu.process(&frame, &output.transform, output_resolution) {
                         Ok(transformed) => {
                             // Send transformed frame to DeckLink output device
-                            #[cfg(feature = "decklink")]
+                            #[cfg(all(feature = "decklink", target_os = "linux"))]
                             {
                                 if let Some(player) = output_players.get_mut(&output.id) {
                                     if let Err(e) =
@@ -254,7 +254,7 @@ impl Pipeline {
             }
 
             // Graceful shutdown: stop DeckLink outputs
-            #[cfg(feature = "decklink")]
+            #[cfg(all(feature = "decklink", target_os = "linux"))]
             for (_id, player) in output_players.iter_mut() {
                 let _ = momo_decklink::VideoOutput::stop(player);
             }

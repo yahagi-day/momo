@@ -14,11 +14,11 @@ use momo_core::types::DeviceStatus;
 
 pub mod conversions;
 
-#[cfg(feature = "decklink")]
+#[cfg(all(feature = "decklink", target_os = "linux"))]
 mod ffi;
-#[cfg(feature = "decklink")]
+#[cfg(all(feature = "decklink", target_os = "linux"))]
 pub mod input;
-#[cfg(feature = "decklink")]
+#[cfg(all(feature = "decklink", target_os = "linux"))]
 pub mod output;
 
 /// Information about a DeckLink device.
@@ -57,18 +57,18 @@ pub trait VideoOutput: Send {
 /// With the `decklink` feature enabled, this queries real hardware via the DeckLink API.
 /// Without it, returns an empty list.
 pub fn enumerate_devices() -> Vec<DeckLinkDevice> {
-    #[cfg(feature = "decklink")]
+    #[cfg(all(feature = "decklink", target_os = "linux"))]
     {
         enumerate_devices_ffi()
     }
-    #[cfg(not(feature = "decklink"))]
+    #[cfg(not(all(feature = "decklink", target_os = "linux")))]
     {
-        tracing::debug!("DeckLink enumeration: feature not enabled, returning empty");
+        tracing::debug!("DeckLink enumeration: feature not enabled or not on Linux, returning empty");
         Vec::new()
     }
 }
 
-#[cfg(feature = "decklink")]
+#[cfg(all(feature = "decklink", target_os = "linux"))]
 fn enumerate_devices_ffi() -> Vec<DeckLinkDevice> {
     let system = ffi::decklink_ffi::create_system();
     if system.is_null() || !system.is_api_present() {

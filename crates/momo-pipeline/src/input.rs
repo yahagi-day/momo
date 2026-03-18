@@ -10,7 +10,7 @@ use crate::mock_input::MockInput;
 
 pub enum InputDriver {
     Mock(MockInput),
-    #[cfg(feature = "decklink")]
+    #[cfg(all(feature = "decklink", target_os = "linux"))]
     DeckLink(momo_decklink::input::DeckLinkInput),
     #[cfg(feature = "uvc")]
     Uvc(momo_uvc::input::UvcInput),
@@ -22,7 +22,7 @@ impl InputDriver {
             InputSource::Mock { width, height, fps } => {
                 Ok(InputDriver::Mock(MockInput::new(*width, *height, *fps)))
             }
-            #[cfg(feature = "decklink")]
+            #[cfg(all(feature = "decklink", target_os = "linux"))]
             InputSource::DeckLink {
                 device_index,
                 display_mode,
@@ -57,7 +57,7 @@ impl InputDriver {
     ) -> std::thread::JoinHandle<()> {
         match self {
             InputDriver::Mock(mock) => mock.start(tx, stop_flag),
-            #[cfg(feature = "decklink")]
+            #[cfg(all(feature = "decklink", target_os = "linux"))]
             InputDriver::DeckLink(dl) => dl.start(tx, stop_flag),
             #[cfg(feature = "uvc")]
             InputDriver::Uvc(uvc) => uvc.start(tx, stop_flag),
