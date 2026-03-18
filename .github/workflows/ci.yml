@@ -98,7 +98,7 @@ jobs:
         with:
           key: x86_64-pc-windows-msvc
 
-      - uses: Jimver/cuda-toolkit@v0.2.19
+      - uses: Jimver/cuda-toolkit@v0.2.30
         with:
           cuda: '12.6.3'
           method: network
