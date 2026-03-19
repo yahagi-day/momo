@@ -1,6 +1,6 @@
-import { Component, Show, createSignal, createEffect } from 'solid-js';
-import type { InputSource, PipelineState, Config, OutputConfig, CropRegion } from '../api/types';
-import { putConfig } from '../api/client';
+import { Component, Show, For, createSignal, createEffect } from 'solid-js';
+import type { InputSource, PipelineState, Config, OutputConfig, CropRegion, DeviceInfo } from '../api/types';
+import { putConfig, getDevices } from '../api/client';
 
 interface Props {
   input: InputSource | null;
@@ -24,6 +24,7 @@ const InputPanel: Component<Props> = (props) => {
   const [uvcPath, setUvcPath] = createSignal('/dev/video0');
   const [error, setError] = createSignal('');
   const [editing, setEditing] = createSignal(false);
+  const [devices, setDevices] = createSignal<DeviceInfo[]>([]);
 
   createEffect(() => {
     const src = props.input;
@@ -45,6 +46,24 @@ const InputPanel: Component<Props> = (props) => {
         break;
     }
   });
+
+  const fetchDevices = async () => {
+    try {
+      const result = await getDevices();
+      setDevices(result);
+    } catch {
+      setDevices([]);
+    }
+  };
+
+  createEffect(() => {
+    if (editing()) {
+      fetchDevices();
+    }
+  });
+
+  const deckLinkInputDevices = () => devices().filter(d => d.device_type === 'DeckLink' && d.has_input);
+  const uvcDevices = () => devices().filter(d => d.device_type === 'Uvc');
 
   const inputLabel = () => {
     const src = props.input;
@@ -137,7 +156,22 @@ const InputPanel: Component<Props> = (props) => {
           <Show when={inputType() === 'DeckLink'}>
             <div class="input-form-row">
               <label>Device</label>
-              <input type="number" value={dlIndex()} onInput={(e) => setDlIndex(parseInt(e.target.value) || 0)} />
+              <div style="display: flex; gap: 4px; flex: 1">
+                <select
+                  value={dlIndex()}
+                  onChange={(e) => setDlIndex(parseInt(e.target.value))}
+                  style="flex: 1"
+                  disabled={deckLinkInputDevices().length === 0}
+                >
+                  <Show when={deckLinkInputDevices().length === 0}>
+                    <option>No devices found</option>
+                  </Show>
+                  <For each={deckLinkInputDevices()}>
+                    {(d) => <option value={d.index}>{d.name} ({d.model_name})</option>}
+                  </For>
+                </select>
+                <button class="btn-action" onClick={fetchDevices} title="Refresh devices" style="padding: 0 6px; min-width: auto">↻</button>
+              </div>
             </div>
             <div class="input-form-row">
               <label>Mode</label>
@@ -158,17 +192,34 @@ const InputPanel: Component<Props> = (props) => {
           <Show when={inputType() === 'Uvc'}>
             <div class="input-form-row">
               <label>Device</label>
-              <input
-                type="text"
-                value={uvcPath()}
-                onInput={(e) => setUvcPath(e.target.value)}
-                placeholder="/dev/video0"
-              />
+              <div style="display: flex; gap: 4px; flex: 1">
+                <select
+                  value={uvcPath()}
+                  onChange={(e) => setUvcPath(e.target.value)}
+                  style="flex: 1"
+                  disabled={uvcDevices().length === 0}
+                >
+                  <Show when={uvcDevices().length === 0}>
+                    <option>No devices found</option>
+                  </Show>
+                  <For each={uvcDevices()}>
+                    {(d) => <option value={d.index.toString()}>{d.name}</option>}
+                  </For>
+                </select>
+                <button class="btn-action" onClick={fetchDevices} title="Refresh devices" style="padding: 0 6px; min-width: auto">↻</button>
+              </div>
             </div>
           </Show>
 
           <div class="input-form-buttons">
-            <button class="btn-action accent-red" onClick={handleApply}>Apply</button>
+            <button
+              class="btn-action accent-red"
+              onClick={handleApply}
+              disabled={
+                (inputType() === 'DeckLink' && deckLinkInputDevices().length === 0) ||
+                (inputType() === 'Uvc' && uvcDevices().length === 0)
+              }
+            >Apply</button>
             <button class="btn-action" onClick={() => { setEditing(false); setError(''); }}>Cancel</button>
           </div>
           {error() && <div class="error-msg">{error()}</div>}
