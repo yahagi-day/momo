@@ -3,6 +3,7 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct DeviceInfo {
+    pub device_type: String,
     pub index: u32,
     pub name: String,
     pub model_name: String,
@@ -12,10 +13,10 @@ pub struct DeviceInfo {
 }
 
 pub async fn get_devices() -> Json<Vec<DeviceInfo>> {
-    let devices = momo_decklink::enumerate_devices();
-    let infos = devices
+    let mut infos: Vec<DeviceInfo> = momo_decklink::enumerate_devices()
         .into_iter()
         .map(|d| DeviceInfo {
+            device_type: "DeckLink".to_string(),
             index: d.index,
             name: d.name,
             model_name: d.model_name,
@@ -24,5 +25,20 @@ pub async fn get_devices() -> Json<Vec<DeviceInfo>> {
             status: format!("{:?}", d.status),
         })
         .collect();
+
+    let uvc_devices: Vec<DeviceInfo> = momo_uvc::enumerate_devices()
+        .into_iter()
+        .map(|d| DeviceInfo {
+            device_type: "Uvc".to_string(),
+            index: d.index,
+            name: d.name.clone(),
+            model_name: d.name,
+            has_input: true,
+            has_output: false,
+            status: "Available".to_string(),
+        })
+        .collect();
+    infos.extend(uvc_devices);
+
     Json(infos)
 }

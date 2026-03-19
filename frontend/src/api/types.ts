@@ -63,3 +63,13 @@ export interface PipelineEvent {
   status?: string;
   message?: string;
 }
+
+export interface DeviceInfo {
+  device_type: string;
+  index: number;
+  name: string;
+  model_name: string;
+  has_input: boolean;
+  has_output: boolean;
+  status: string;
+}

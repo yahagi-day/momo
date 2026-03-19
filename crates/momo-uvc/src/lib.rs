@@ -9,16 +9,33 @@ pub mod convert;
 #[cfg(feature = "uvc")]
 pub mod input;
 
+/// Information about an available UVC device.
+pub struct UvcDevice {
+    /// Numeric index of the device.
+    pub index: u32,
+    /// Human-readable device name.
+    pub name: String,
+    /// Device path/identifier for use in `InputSource::Uvc { device_path }`.
+    pub path: String,
+}
+
 /// Enumerate available UVC devices.
 ///
-/// Returns device paths/identifiers. Without the `uvc` feature, returns empty.
-pub fn enumerate_devices() -> Vec<String> {
+/// Returns structured device info. Without the `uvc` feature, returns empty.
+pub fn enumerate_devices() -> Vec<UvcDevice> {
     #[cfg(feature = "uvc")]
     {
         match nokhwa::query(nokhwa::utils::ApiBackend::Auto) {
             Ok(devices) => devices
                 .iter()
-                .map(|d| format!("{}: {}", d.index(), d.human_name()))
+                .map(|d| UvcDevice {
+                    index: match d.index() {
+                        nokhwa::utils::CameraIndex::Index(i) => *i,
+                        _ => 0,
+                    },
+                    name: d.human_name().to_string(),
+                    path: format!("{}", d.index()),
+                })
                 .collect(),
             Err(e) => {
                 tracing::warn!("UVC enumeration failed: {e}");

@@ -81,14 +81,13 @@ const OutputCard: Component<Props> = (props) => {
         width: "4px", height: "100%",
         background: props.color, "border-radius": "2px"
       }} />
-      <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
-        <h3 style={{ margin: 0 }}>{props.output.name} <span style={{ color: "var(--text-muted)", "font-weight": "400" }}>({props.output.id})</span></h3>
+      <div class="output-card-header">
+        <h3 class="output-card-title">{props.output.name} <span style={{ color: "var(--text-muted)", "font-weight": "400" }}>({props.output.id})</span></h3>
         <Show when={!props.pipelineRunning && props.onRemove}>
           <button
-            class="btn-action accent-red"
-            style={{ padding: "2px 8px", "font-size": "0.75rem", "min-width": "auto" }}
+            class="btn-action accent-red output-card-delete"
             onClick={() => props.onRemove?.(props.output.id)}
-          >Delete</button>
+          >Del</button>
         </Show>
       </div>
       <div class="fields">
@@ -110,18 +109,26 @@ const OutputCard: Component<Props> = (props) => {
         <div class="crop-fields">
           <label>Crop</label>
           <div class="crop-inputs">
-            <label>X</label>
-            <input type="number" value={crop()!.x} step={2} disabled={!editing()}
-              onInput={(e) => handleCropFieldChange('x', parseInt(e.target.value) || 0)} />
-            <label>Y</label>
-            <input type="number" value={crop()!.y} disabled={!editing()}
-              onInput={(e) => handleCropFieldChange('y', parseInt(e.target.value) || 0)} />
-            <label>W</label>
-            <input type="number" value={crop()!.width} step={2} disabled={!editing()}
-              onInput={(e) => handleCropFieldChange('width', parseInt(e.target.value) || 0)} />
-            <label>H</label>
-            <input type="number" value={crop()!.height} disabled={!editing()}
-              onInput={(e) => handleCropFieldChange('height', parseInt(e.target.value) || 0)} />
+            <div class="crop-input-cell">
+              <label>X</label>
+              <input type="number" value={crop()!.x} step={2} disabled={!editing()}
+                onInput={(e) => handleCropFieldChange('x', parseInt(e.target.value) || 0)} />
+            </div>
+            <div class="crop-input-cell">
+              <label>Y</label>
+              <input type="number" value={crop()!.y} disabled={!editing()}
+                onInput={(e) => handleCropFieldChange('y', parseInt(e.target.value) || 0)} />
+            </div>
+            <div class="crop-input-cell">
+              <label>W</label>
+              <input type="number" value={crop()!.width} step={2} disabled={!editing()}
+                onInput={(e) => handleCropFieldChange('width', parseInt(e.target.value) || 0)} />
+            </div>
+            <div class="crop-input-cell">
+              <label>H</label>
+              <input type="number" value={crop()!.height} disabled={!editing()}
+                onInput={(e) => handleCropFieldChange('height', parseInt(e.target.value) || 0)} />
+            </div>
           </div>
         </div>
       </Show>
