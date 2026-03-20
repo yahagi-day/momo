@@ -83,7 +83,7 @@ impl UvcInput {
                         Ok(buf) => {
                             let data = yuyv_to_uyvy(buf.buffer());
                             let frame = Frame {
-                                data,
+                                data: std::sync::Arc::new(data),
                                 resolution: Resolution {
                                     width: self.width,
                                     height: self.height,

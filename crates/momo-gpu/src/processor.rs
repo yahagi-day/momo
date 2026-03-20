@@ -66,6 +66,8 @@ impl GpuProcessor {
         transform: &OutputTransform,
         output_resolution: Resolution,
     ) -> Result<Frame> {
+        use std::sync::Arc;
+
         let mut data = std::borrow::Cow::Borrowed(&input.data[..]);
         let mut current_res = input.resolution;
 
@@ -98,8 +100,13 @@ impl GpuProcessor {
             ));
         }
 
+        let out_data = match data {
+            std::borrow::Cow::Borrowed(_) => input.data.clone(), // Arc clone, zero copy
+            std::borrow::Cow::Owned(v) => Arc::new(v),
+        };
+
         Ok(Frame {
-            data: data.into_owned(),
+            data: out_data,
             resolution: current_res,
             format: input.format,
             timestamp_ns: input.timestamp_ns,
@@ -115,7 +122,7 @@ impl GpuProcessor {
         transform: &OutputTransform,
         output_resolution: Resolution,
     ) -> Result<Frame> {
-        let mut data = input.data.clone();
+        let mut data = (*input.data).clone();
         let mut current_res = input.resolution;
 
         // 1. Crop
@@ -146,7 +153,7 @@ impl GpuProcessor {
         }
 
         Ok(Frame {
-            data,
+            data: std::sync::Arc::new(data),
             resolution: current_res,
             format: input.format,
             timestamp_ns: input.timestamp_ns,
@@ -168,7 +175,7 @@ mod tests {
 
     fn make_test_frame(w: u32, h: u32) -> Frame {
         Frame {
-            data: vec![128u8; (w * h * 2) as usize],
+            data: std::sync::Arc::new(vec![128u8; (w * h * 2) as usize]),
             resolution: Resolution { width: w, height: h },
             format: PixelFormat::Uyvy,
             timestamp_ns: 1000,

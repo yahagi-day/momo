@@ -6,7 +6,7 @@ import StatusBar from './components/StatusBar';
 import InputPanel from './components/InputPanel';
 import OutputList from './components/OutputList';
 import ConfigActions from './components/ConfigActions';
-import Waveform from './components/Waveform';
+import FpsChart from './components/FpsChart';
 import CropOverlay from './components/CropOverlay';
 import { getInputResolution } from './utils/coordinates';
 
@@ -158,7 +158,7 @@ const App: Component = () => {
 
       <div class="bottom-bar">
         <div class="waveform-footer">
-          <Waveform height={64} src={isRunning() ? '/api/preview/input' : undefined} />
+          <FpsChart height={64} fps={fps()} />
         </div>
         <ConfigActions onConfigLoaded={fetchConfig} />
       </div>

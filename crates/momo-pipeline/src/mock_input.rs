@@ -63,8 +63,7 @@ impl MockInput {
                     self.height,
                     self.fps
                 );
-                let frame_data = generate_color_bars(self.width, self.height);
-                let interval = Duration::from_secs_f64(1.0 / self.fps as f64);
+                let frame_data = Arc::new(generate_color_bars(self.width, self.height));
                 let mut sequence = 0u64;
                 let start = Instant::now();
 
@@ -85,7 +84,8 @@ impl MockInput {
                     }
 
                     sequence += 1;
-                    let next = start + interval * sequence as u32;
+                    let next =
+                        start + Duration::from_secs_f64(sequence as f64 / self.fps as f64);
                     let now = Instant::now();
                     if next > now {
                         std::thread::sleep(next - now);
