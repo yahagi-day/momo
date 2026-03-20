@@ -1,6 +1,6 @@
 import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
 import type { Config, PipelineState, CropRegion, OutputConfig } from './api/types';
-import { getStatus, getConfig, putConfig, startPipeline, stopPipeline } from './api/client';
+import { getStatus, getConfig, putConfig, startPipeline } from './api/client';
 import { connectWebSocket } from './api/websocket';
 import StatusBar from './components/StatusBar';
 import InputPanel from './components/InputPanel';
@@ -40,7 +40,7 @@ const App: Component = () => {
     fetchConfig();
   });
 
-  const cleanup = connectWebSocket((event) => {
+  const ws = connectWebSocket((event) => {
     switch (event.type) {
       case 'StateChanged':
         if (event.state) setState(event.state);
@@ -57,7 +57,7 @@ const App: Component = () => {
     }
   });
 
-  onCleanup(cleanup);
+  onCleanup(ws.cleanup);
 
   const handleStart = async () => {
     try {
@@ -68,14 +68,10 @@ const App: Component = () => {
     }
   };
 
-  const handleStop = async () => {
-    try {
-      setError('');
-      setFps(0);
-      await stopPipeline();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to stop');
-    }
+  const handleStop = () => {
+    setError('');
+    setFps(0);
+    ws.send('stop');
   };
 
   const handleCropChange = (id: string, crop: CropRegion) => {

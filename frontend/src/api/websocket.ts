@@ -1,6 +1,11 @@
 import type { PipelineEvent } from './types';
 
-export function connectWebSocket(onEvent: (event: PipelineEvent) => void): () => void {
+export interface WsConnection {
+  send: (command: string) => void;
+  cleanup: () => void;
+}
+
+export function connectWebSocket(onEvent: (event: PipelineEvent) => void): WsConnection {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${protocol}//${location.host}/ws/status`;
 
@@ -33,8 +38,15 @@ export function connectWebSocket(onEvent: (event: PipelineEvent) => void): () =>
 
   connect();
 
-  return () => {
-    closed = true;
-    ws?.close();
+  return {
+    send: (command: string) => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ command }));
+      }
+    },
+    cleanup: () => {
+      closed = true;
+      ws?.close();
+    },
   };
 }
