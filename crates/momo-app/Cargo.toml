@@ -8,6 +8,7 @@ default = []
 decklink = ["momo-pipeline/decklink"]
 uvc = ["momo-pipeline/uvc"]
 gpu = ["momo-pipeline/gpu"]
+webrtc = ["momo-web/webrtc"]
 
 [dependencies]
 momo-core = { workspace = true }

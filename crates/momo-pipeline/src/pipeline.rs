@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use momo_core::config::{Config, OutputConfig};
 use momo_core::error::{Error, Result};
+use momo_core::frame::Frame;
 use momo_core::types::{OutputTransform, PipelineState};
 use tokio::sync::broadcast;
 
@@ -13,15 +14,14 @@ use momo_gpu::GpuProcessor;
 
 use crate::event::PipelineEvent;
 use crate::input::InputDriver;
-use crate::preview::encode_preview;
 
 pub struct Pipeline {
     state: PipelineState,
     config: Option<Config>,
     config_path: Option<PathBuf>,
     event_tx: broadcast::Sender<PipelineEvent>,
-    preview_tx: broadcast::Sender<Vec<u8>>,
-    output_preview_txs: HashMap<String, broadcast::Sender<Vec<u8>>>,
+    preview_tx: broadcast::Sender<Arc<Frame>>,
+    output_preview_txs: HashMap<String, broadcast::Sender<Arc<Frame>>>,
     running: Option<RunningState>,
 }
 
@@ -60,11 +60,11 @@ impl Pipeline {
         self.event_tx.subscribe()
     }
 
-    pub fn subscribe_preview(&self) -> broadcast::Receiver<Vec<u8>> {
+    pub fn subscribe_preview(&self) -> broadcast::Receiver<Arc<Frame>> {
         self.preview_tx.subscribe()
     }
 
-    pub fn subscribe_output_preview(&self, id: &str) -> Option<broadcast::Receiver<Vec<u8>>> {
+    pub fn subscribe_output_preview(&self, id: &str) -> Option<broadcast::Receiver<Arc<Frame>>> {
         self.output_preview_txs.get(id).map(|tx| tx.subscribe())
     }
 
@@ -163,7 +163,7 @@ impl Pipeline {
             players
         };
 
-        // Preview encoding + FPS tracking + per-output GPU transforms + DeckLink output
+        // FPS tracking + per-output GPU transforms + DeckLink output + raw frame broadcast
         let preview_tx = self.preview_tx.clone();
         let event_tx = self.event_tx.clone();
         let preview_config = config.preview.clone();
@@ -172,9 +172,11 @@ impl Pipeline {
             let mut last_fps_time = tokio::time::Instant::now();
             let gpu = GpuProcessor::new();
             let preview_interval = Duration::from_secs_f64(1.0 / preview_config.fps as f64);
-            let mut last_output_preview_time = tokio::time::Instant::now()
+            let initial_time = tokio::time::Instant::now()
                 .checked_sub(preview_interval)
                 .unwrap_or_else(tokio::time::Instant::now);
+            let mut last_preview_time = initial_time;
+            let mut last_output_preview_time = initial_time;
 
             while let Some(frame) = bridge_rx.recv().await {
                 frame_count += 1;
@@ -187,7 +189,9 @@ impl Pipeline {
                 }
 
                 let now = tokio::time::Instant::now();
-                let should_encode_output_preview =
+                let should_send_preview =
+                    now.duration_since(last_preview_time) >= preview_interval;
+                let should_send_output_preview =
                     now.duration_since(last_output_preview_time) >= preview_interval;
 
                 // Read latest output configs (updated via watch channel on crop/transform changes)
@@ -220,19 +224,11 @@ impl Pipeline {
                                 output_resolution.height,
                             );
 
-                            // Encode output preview if throttle allows and someone is listening
-                            if should_encode_output_preview {
+                            // Send raw frame for output preview (non-blocking, throttled)
+                            if should_send_output_preview {
                                 if let Some(tx) = output_preview_txs_task.get(&output.id) {
                                     if tx.receiver_count() > 0 {
-                                        let pc = preview_config.clone();
-                                        if let Ok(Ok(jpeg)) =
-                                            tokio::task::spawn_blocking(move || {
-                                                encode_preview(&transformed, &pc)
-                                            })
-                                            .await
-                                        {
-                                            let _ = tx.send(jpeg);
-                                        }
+                                        let _ = tx.send(Arc::new(transformed));
                                     }
                                 }
                             }
@@ -246,16 +242,14 @@ impl Pipeline {
                     }
                 }
 
-                if should_encode_output_preview {
+                if should_send_output_preview {
                     last_output_preview_time = now;
                 }
 
-                // Preview encode
-                let pc = preview_config.clone();
-                if let Ok(Ok(jpeg)) =
-                    tokio::task::spawn_blocking(move || encode_preview(&frame, &pc)).await
-                {
-                    let _ = preview_tx.send(jpeg);
+                // Send raw frame for input preview (non-blocking, throttled)
+                if should_send_preview {
+                    let _ = preview_tx.send(Arc::new(frame));
+                    last_preview_time = now;
                 }
             }
 
@@ -497,10 +491,12 @@ mod tests {
 
         pipeline.start().unwrap();
 
-        // Wait for at least one preview frame
+        // Wait for at least one raw frame
         let result =
             tokio::time::timeout(Duration::from_secs(3), preview_rx.recv()).await;
         assert!(result.is_ok(), "should receive a preview frame");
+        let frame = result.unwrap().unwrap();
+        assert!(!frame.data.is_empty(), "frame should have data");
 
         pipeline.stop().unwrap();
     }

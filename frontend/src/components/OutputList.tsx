@@ -24,6 +24,7 @@ interface Props {
   pipelineRunning: boolean;
   onAddOutput: (output: OutputConfig) => Promise<void>;
   onRemoveOutput: (id: string) => Promise<void>;
+  getWebRTCStream?: (streamId: string) => MediaStream | null;
 }
 
 const OutputList: Component<Props> = (props) => {
@@ -88,6 +89,7 @@ const OutputList: Component<Props> = (props) => {
               onCropChange={props.onCropChange}
               pipelineRunning={props.pipelineRunning}
               onRemove={(id) => props.onRemoveOutput(id)}
+              webrtcStream={props.getWebRTCStream?.(output().id) ?? null}
             />
           )}
         </Index>

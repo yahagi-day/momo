@@ -6,6 +6,7 @@ members = [
     "crates/momo-uvc",
     "crates/momo-gpu",
     "crates/momo-pipeline",
+    "crates/momo-webrtc",
     "crates/momo-web",
     "crates/momo-app",
 ]
@@ -16,6 +17,7 @@ momo-decklink = { path = "crates/momo-decklink" }
 momo-uvc = { path = "crates/momo-uvc" }
 momo-gpu = { path = "crates/momo-gpu" }
 momo-pipeline = { path = "crates/momo-pipeline" }
+momo-webrtc = { path = "crates/momo-webrtc" }
 momo-web = { path = "crates/momo-web" }
 
 serde = { version = "1", features = ["derive"] }
