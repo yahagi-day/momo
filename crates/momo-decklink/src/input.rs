@@ -74,7 +74,7 @@ impl DeckLinkInput {
                     }
 
                     let frame = Frame {
-                        data,
+                        data: std::sync::Arc::new(data),
                         resolution: Resolution {
                             width: resolution.width,
                             height: resolution.height,

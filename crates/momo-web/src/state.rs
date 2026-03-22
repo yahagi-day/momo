@@ -27,9 +27,9 @@ impl AppState {
                 Arc::new(move |stream_id: &str| {
                     let pipeline = pipeline_ref.blocking_read();
                     if stream_id == "input" {
-                        Some(pipeline.subscribe_preview())
+                        Some(pipeline.subscribe_raw_preview())
                     } else {
-                        pipeline.subscribe_output_preview(stream_id)
+                        pipeline.subscribe_raw_output_preview(stream_id)
                     }
                 });
             let manager = Arc::new(WebRtcManager::new(subscribe_fn, preview_config));

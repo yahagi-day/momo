@@ -165,7 +165,7 @@ mod tests {
         let height = 240u32;
         let data = vec![128u8; (width * height * 2) as usize];
         let frame = Frame {
-            data,
+            data: std::sync::Arc::new(data),
             resolution: Resolution { width, height },
             format: PixelFormat::Uyvy,
             timestamp_ns: 0,

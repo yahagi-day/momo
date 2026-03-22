@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use crate::types::{PixelFormat, Resolution};
 
 /// A video frame with CPU-side pixel data.
 #[derive(Debug, Clone)]
 pub struct Frame {
     /// Pixel data in the specified format.
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     /// Frame resolution.
     pub resolution: Resolution,
     /// Pixel format.

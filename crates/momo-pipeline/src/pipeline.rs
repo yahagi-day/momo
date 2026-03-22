@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use momo_core::config::{Config, OutputConfig};
 use momo_core::error::{Error, Result};
@@ -14,22 +14,25 @@ use momo_gpu::GpuProcessor;
 
 use crate::event::PipelineEvent;
 use crate::input::InputDriver;
+use crate::preview::encode_preview;
 
 pub struct Pipeline {
     state: PipelineState,
     config: Option<Config>,
     config_path: Option<PathBuf>,
     event_tx: broadcast::Sender<PipelineEvent>,
-    preview_tx: broadcast::Sender<Arc<Frame>>,
-    output_preview_txs: HashMap<String, broadcast::Sender<Arc<Frame>>>,
+    preview_tx: broadcast::Sender<Vec<u8>>,
+    output_preview_txs: HashMap<String, broadcast::Sender<Vec<u8>>>,
+    /// Raw frame broadcast for WebRTC (Arc<Frame> instead of encoded JPEG)
+    raw_preview_tx: broadcast::Sender<Arc<Frame>>,
+    raw_output_preview_txs: HashMap<String, broadcast::Sender<Arc<Frame>>>,
     running: Option<RunningState>,
 }
 
 struct RunningState {
     stop_flag: Arc<AtomicBool>,
     _input_thread: std::thread::JoinHandle<()>,
-    bridge_task: tokio::task::JoinHandle<()>,
-    preview_task: tokio::task::JoinHandle<()>,
+    _frame_loop_thread: std::thread::JoinHandle<()>,
     output_configs_tx: tokio::sync::watch::Sender<Vec<OutputConfig>>,
 }
 
@@ -37,13 +40,16 @@ impl Pipeline {
     pub fn new() -> Self {
         let (event_tx, _) = broadcast::channel(64);
         let (preview_tx, _) = broadcast::channel(4);
+        let (raw_preview_tx, _) = broadcast::channel(4);
         Self {
             state: PipelineState::Stopped,
             config: None,
             config_path: None,
             event_tx,
             preview_tx,
+            raw_preview_tx,
             output_preview_txs: HashMap::new(),
+            raw_output_preview_txs: HashMap::new(),
             running: None,
         }
     }
@@ -60,12 +66,27 @@ impl Pipeline {
         self.event_tx.subscribe()
     }
 
-    pub fn subscribe_preview(&self) -> broadcast::Receiver<Arc<Frame>> {
+    pub fn subscribe_preview(&self) -> broadcast::Receiver<Vec<u8>> {
         self.preview_tx.subscribe()
     }
 
-    pub fn subscribe_output_preview(&self, id: &str) -> Option<broadcast::Receiver<Arc<Frame>>> {
+    pub fn subscribe_output_preview(&self, id: &str) -> Option<broadcast::Receiver<Vec<u8>>> {
         self.output_preview_txs.get(id).map(|tx| tx.subscribe())
+    }
+
+    /// Subscribe to raw input frames (for WebRTC).
+    pub fn subscribe_raw_preview(&self) -> broadcast::Receiver<Arc<Frame>> {
+        self.raw_preview_tx.subscribe()
+    }
+
+    /// Subscribe to raw output frames (for WebRTC).
+    pub fn subscribe_raw_output_preview(
+        &self,
+        id: &str,
+    ) -> Option<broadcast::Receiver<Arc<Frame>>> {
+        self.raw_output_preview_txs
+            .get(id)
+            .map(|tx| tx.subscribe())
     }
 
     pub fn set_config(&mut self, config: Config) -> Result<()> {
@@ -100,23 +121,6 @@ impl Pipeline {
 
         let input_thread = driver.start(frame_tx, stop_flag.clone());
 
-        // Bridge: crossbeam → tokio mpsc
-        let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel(2);
-        let bridge_stop = stop_flag.clone();
-        let bridge_task = tokio::task::spawn_blocking(move || {
-            while !bridge_stop.load(Ordering::Relaxed) {
-                match frame_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(frame) => {
-                        if bridge_tx.blocking_send(frame).is_err() {
-                            break;
-                        }
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-        });
-
         // Collect enabled output configs, shared via watch channel for live updates
         let output_configs: Vec<_> = config
             .outputs
@@ -124,10 +128,10 @@ impl Pipeline {
             .filter(|o| o.enabled)
             .cloned()
             .collect();
-        let (output_configs_tx, output_configs_rx) =
+        let (output_configs_tx, mut output_configs_rx) =
             tokio::sync::watch::channel(output_configs.clone());
 
-        // Create per-output preview channels
+        // Create per-output preview channels (JPEG for MJPEG)
         let mut output_preview_txs_map = HashMap::new();
         let mut output_preview_txs_task = HashMap::new();
         for output in &output_configs {
@@ -136,6 +140,16 @@ impl Pipeline {
             output_preview_txs_map.insert(output.id.clone(), tx);
         }
         self.output_preview_txs = output_preview_txs_map;
+
+        // Create per-output raw frame channels (for WebRTC)
+        let mut raw_output_preview_txs_map = HashMap::new();
+        let mut raw_output_preview_txs_task = HashMap::new();
+        for output in &output_configs {
+            let (tx, _) = broadcast::channel(4);
+            raw_output_preview_txs_task.insert(output.id.clone(), tx.clone());
+            raw_output_preview_txs_map.insert(output.id.clone(), tx);
+        }
+        self.raw_output_preview_txs = raw_output_preview_txs_map;
 
         // Create and start DeckLink outputs (feature-gated)
         #[cfg(feature = "decklink")]
@@ -163,108 +177,247 @@ impl Pipeline {
             players
         };
 
-        // FPS tracking + per-output GPU transforms + DeckLink output + raw frame broadcast
+        // Frame loop on dedicated OS thread — receives directly from crossbeam,
+        // no async scheduling overhead
         let preview_tx = self.preview_tx.clone();
+        let raw_preview_tx = self.raw_preview_tx.clone();
         let event_tx = self.event_tx.clone();
         let preview_config = config.preview.clone();
-        let preview_task = tokio::spawn(async move {
-            let mut frame_count = 0u64;
-            let mut last_fps_time = tokio::time::Instant::now();
-            let gpu = GpuProcessor::new();
-            let preview_interval = Duration::from_secs_f64(1.0 / preview_config.fps as f64);
-            let initial_time = tokio::time::Instant::now()
-                .checked_sub(preview_interval)
-                .unwrap_or_else(tokio::time::Instant::now);
-            let mut last_preview_time = initial_time;
-            let mut last_output_preview_time = initial_time;
+        let loop_stop = stop_flag.clone();
+        let handle = tokio::runtime::Handle::current();
+        let frame_loop_thread = std::thread::Builder::new()
+            .name("frame-loop".into())
+            .spawn(move || {
+                let gpu = Arc::new(GpuProcessor::new());
+                let preview_interval =
+                    Duration::from_secs_f64(1.0 / preview_config.fps as f64);
+                let initial_time = Instant::now()
+                    .checked_sub(preview_interval)
+                    .unwrap_or_else(Instant::now);
+                let mut last_output_preview_time = initial_time;
+                let mut last_input_preview_time = initial_time;
+                let input_encoding = Arc::new(AtomicBool::new(false));
+                let output_encoding_flags: HashMap<String, Arc<AtomicBool>> =
+                    output_preview_txs_task
+                        .keys()
+                        .map(|id| (id.clone(), Arc::new(AtomicBool::new(false))))
+                        .collect();
+                let mut frame_count = 0u64;
+                let mut last_fps_time = Instant::now();
+                let mut smoothed_fps = 0.0f64;
 
-            while let Some(frame) = bridge_rx.recv().await {
-                frame_count += 1;
-                let elapsed = last_fps_time.elapsed();
-                if elapsed >= Duration::from_secs(1) {
-                    let fps = frame_count as f64 / elapsed.as_secs_f64();
-                    frame_count = 0;
-                    last_fps_time = tokio::time::Instant::now();
-                    let _ = event_tx.send(PipelineEvent::FpsUpdate { fps });
-                }
+                let mut current_outputs = output_configs_rx.borrow_and_update().clone();
 
-                let now = tokio::time::Instant::now();
-                let should_send_preview =
-                    now.duration_since(last_preview_time) >= preview_interval;
-                let should_send_output_preview =
-                    now.duration_since(last_output_preview_time) >= preview_interval;
+                while !loop_stop.load(Ordering::Relaxed) {
+                    let frame = match frame_rx.recv_timeout(Duration::from_millis(100)) {
+                        Ok(f) => f,
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                    };
 
-                // Read latest output configs (updated via watch channel on crop/transform changes)
-                let current_outputs = output_configs_rx.borrow().clone();
+                    // FPS tracking
+                    frame_count += 1;
+                    let elapsed = last_fps_time.elapsed();
+                    if elapsed >= Duration::from_millis(500) {
+                        let measured = frame_count as f64 / elapsed.as_secs_f64();
+                        smoothed_fps = if smoothed_fps == 0.0 {
+                            measured
+                        } else {
+                            0.3 * measured + 0.7 * smoothed_fps
+                        };
+                        frame_count = 0;
+                        last_fps_time = Instant::now();
+                        let _ = event_tx.send(PipelineEvent::FpsUpdate {
+                            fps: (smoothed_fps * 10.0).round() / 10.0,
+                        });
+                    }
 
-                // Per-output GPU transform + DeckLink output
-                for output in &current_outputs {
-                    let output_resolution = output.display_mode.resolution();
-                    match gpu.process(&frame, &output.transform, output_resolution) {
-                        Ok(transformed) => {
-                            // Send transformed frame to DeckLink output device
-                            #[cfg(feature = "decklink")]
-                            {
-                                if let Some(player) = output_players.get_mut(&output.id) {
-                                    if let Err(e) =
-                                        momo_decklink::VideoOutput::send_frame(player, &transformed)
+                    let now = Instant::now();
+                    let should_encode_output_preview =
+                        now.duration_since(last_output_preview_time) >= preview_interval;
+
+                    // Read latest output configs only when changed
+                    if output_configs_rx.has_changed().unwrap_or(false) {
+                        current_outputs = output_configs_rx.borrow_and_update().clone();
+                    }
+
+                    // Per-output GPU transform + DeckLink output
+                    for output in &current_outputs {
+                        let encoding_flag = output_encoding_flags.get(&output.id);
+                        let needs_preview = should_encode_output_preview
+                            && output_preview_txs_task
+                                .get(&output.id)
+                                .is_some_and(|tx| tx.receiver_count() > 0)
+                            && encoding_flag
+                                .is_none_or(|f| !f.load(Ordering::Relaxed));
+
+                        // Check if raw output preview has subscribers (WebRTC)
+                        let needs_raw_preview = should_encode_output_preview
+                            && raw_output_preview_txs_task
+                                .get(&output.id)
+                                .is_some_and(|tx| tx.receiver_count() > 0);
+
+                        #[cfg(feature = "decklink")]
+                        let needs_decklink = output_players.contains_key(&output.id);
+                        #[cfg(not(feature = "decklink"))]
+                        let needs_decklink = false;
+
+                        if !needs_preview && !needs_decklink && !needs_raw_preview {
+                            continue;
+                        }
+
+                        let output_resolution = output.display_mode.resolution();
+
+                        // DeckLink: synchronous transform + send_frame
+                        #[cfg(feature = "decklink")]
+                        {
+                            match gpu.process(&frame, &output.transform, output_resolution) {
+                                Ok(transformed) => {
+                                    if let Some(player) =
+                                        output_players.get_mut(&output.id)
                                     {
-                                        tracing::warn!(
-                                            output_id = %output.id,
-                                            "DeckLink output error: {e}"
-                                        );
+                                        if let Err(e) =
+                                            momo_decklink::VideoOutput::send_frame(
+                                                player,
+                                                &transformed,
+                                            )
+                                        {
+                                            tracing::warn!(
+                                                output_id = %output.id,
+                                                "DeckLink output error: {e}"
+                                            );
+                                        }
+                                    }
+
+                                    // Raw frame broadcast for WebRTC
+                                    if needs_raw_preview {
+                                        if let Some(tx) =
+                                            raw_output_preview_txs_task.get(&output.id)
+                                        {
+                                            let _ = tx.send(Arc::new(transformed.clone()));
+                                        }
+                                    }
+
+                                    if needs_preview {
+                                        if let Some(tx) =
+                                            output_preview_txs_task.get(&output.id)
+                                        {
+                                            let flag = encoding_flag.cloned();
+                                            if let Some(ref f) = flag {
+                                                f.store(true, Ordering::Relaxed);
+                                            }
+                                            let pc = preview_config.clone();
+                                            let tx = tx.clone();
+                                            handle.spawn_blocking(move || {
+                                                if let Ok(jpeg) =
+                                                    encode_preview(&transformed, &pc)
+                                                {
+                                                    let _ = tx.send(jpeg);
+                                                }
+                                                if let Some(f) = flag {
+                                                    f.store(false, Ordering::Relaxed);
+                                                }
+                                            });
+                                        }
                                     }
                                 }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        output_id = %output.id,
+                                        "GPU transform failed: {e}"
+                                    );
+                                }
                             }
+                        }
 
-                            tracing::trace!(
-                                output_id = %output.id,
-                                "transformed frame ready ({}x{})",
-                                output_resolution.width,
-                                output_resolution.height,
-                            );
-
-                            // Send raw frame for output preview (non-blocking, throttled)
-                            if should_send_output_preview {
-                                if let Some(tx) = output_preview_txs_task.get(&output.id) {
-                                    if tx.receiver_count() > 0 {
+                        // Without DeckLink: transform + encode in spawn_blocking
+                        #[cfg(not(feature = "decklink"))]
+                        {
+                            if needs_raw_preview {
+                                if let Ok(transformed) =
+                                    gpu.process(&frame, &output.transform, output_resolution)
+                                {
+                                    if let Some(tx) =
+                                        raw_output_preview_txs_task.get(&output.id)
+                                    {
                                         let _ = tx.send(Arc::new(transformed));
                                     }
                                 }
                             }
+
+                            if needs_preview {
+                                if let Some(tx) = output_preview_txs_task.get(&output.id) {
+                                    let flag = encoding_flag.cloned();
+                                    if let Some(ref f) = flag {
+                                        f.store(true, Ordering::Relaxed);
+                                    }
+                                    let frame = frame.clone();
+                                    let transform = output.transform.clone();
+                                    let pc = preview_config.clone();
+                                    let tx = tx.clone();
+                                    let gpu = gpu.clone();
+                                    handle.spawn_blocking(move || {
+                                        if let Ok(transformed) =
+                                            gpu.process(&frame, &transform, output_resolution)
+                                        {
+                                            if let Ok(jpeg) =
+                                                encode_preview(&transformed, &pc)
+                                            {
+                                                let _ = tx.send(jpeg);
+                                            }
+                                        }
+                                        if let Some(f) = flag {
+                                            f.store(false, Ordering::Relaxed);
+                                        }
+                                    });
+                                }
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                output_id = %output.id,
-                                "GPU transform failed: {e}"
-                            );
-                        }
+                    }
+
+                    if should_encode_output_preview {
+                        last_output_preview_time = now;
+                    }
+
+                    // Input preview encode (MJPEG)
+                    let should_encode_input_preview =
+                        now.duration_since(last_input_preview_time) >= preview_interval;
+                    if should_encode_input_preview
+                        && preview_tx.receiver_count() > 0
+                        && !input_encoding.load(Ordering::Relaxed)
+                    {
+                        last_input_preview_time = now;
+                        input_encoding.store(true, Ordering::Relaxed);
+                        let pc = preview_config.clone();
+                        let ptx = preview_tx.clone();
+                        let frame = frame.clone();
+                        let enc_flag = input_encoding.clone();
+                        handle.spawn_blocking(move || {
+                            if let Ok(jpeg) = encode_preview(&frame, &pc) {
+                                let _ = ptx.send(jpeg);
+                            }
+                            enc_flag.store(false, Ordering::Relaxed);
+                        });
+                    }
+
+                    // Raw input frame broadcast for WebRTC (throttled at preview FPS)
+                    if should_encode_input_preview && raw_preview_tx.receiver_count() > 0 {
+                        let _ = raw_preview_tx.send(Arc::new(frame));
                     }
                 }
 
-                if should_send_output_preview {
-                    last_output_preview_time = now;
+                // Graceful shutdown: stop DeckLink outputs
+                #[cfg(feature = "decklink")]
+                for (_id, player) in output_players.iter_mut() {
+                    let _ = momo_decklink::VideoOutput::stop(player);
                 }
-
-                // Send raw frame for input preview (non-blocking, throttled)
-                if should_send_preview {
-                    let _ = preview_tx.send(Arc::new(frame));
-                    last_preview_time = now;
-                }
-            }
-
-            // Graceful shutdown: stop DeckLink outputs
-            #[cfg(feature = "decklink")]
-            for (_id, player) in output_players.iter_mut() {
-                let _ = momo_decklink::VideoOutput::stop(player);
-            }
-        });
+            })
+            .expect("failed to spawn frame loop thread");
 
         self.running = Some(RunningState {
             stop_flag,
             _input_thread: input_thread,
-            bridge_task,
-            preview_task,
+            _frame_loop_thread: frame_loop_thread,
             output_configs_tx,
         });
 
@@ -284,11 +437,11 @@ impl Pipeline {
 
         if let Some(running) = self.running.take() {
             running.stop_flag.store(true, Ordering::Relaxed);
-            running.preview_task.abort();
-            running.bridge_task.abort();
+            // Frame loop thread exits via stop_flag + recv_timeout
         }
 
         self.output_preview_txs.clear();
+        self.raw_output_preview_txs.clear();
         self.state = PipelineState::Stopped;
         self.emit(PipelineEvent::StateChanged { state: self.state });
 
@@ -491,12 +644,10 @@ mod tests {
 
         pipeline.start().unwrap();
 
-        // Wait for at least one raw frame
+        // Wait for at least one preview frame
         let result =
             tokio::time::timeout(Duration::from_secs(3), preview_rx.recv()).await;
         assert!(result.is_ok(), "should receive a preview frame");
-        let frame = result.unwrap().unwrap();
-        assert!(!frame.data.is_empty(), "frame should have data");
 
         pipeline.stop().unwrap();
     }

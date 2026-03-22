@@ -1,13 +1,13 @@
 import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
 import type { Config, PipelineState, CropRegion, OutputConfig } from './api/types';
-import { getStatus, getConfig, putConfig, startPipeline, stopPipeline } from './api/client';
+import { getStatus, getConfig, putConfig, startPipeline } from './api/client';
 import { connectWebSocket } from './api/websocket';
 import { PreviewStream } from './api/webrtc';
 import StatusBar from './components/StatusBar';
 import InputPanel from './components/InputPanel';
 import OutputList from './components/OutputList';
 import ConfigActions from './components/ConfigActions';
-import Waveform from './components/Waveform';
+import FpsChart from './components/FpsChart';
 import CropOverlay from './components/CropOverlay';
 import { getInputResolution } from './utils/coordinates';
 
@@ -75,7 +75,7 @@ const App: Component = () => {
     setupWebRTC();
   });
 
-  const cleanup = connectWebSocket((event) => {
+  const ws = connectWebSocket((event) => {
     switch (event.type) {
       case 'StateChanged':
         if (event.state) {
@@ -98,7 +98,7 @@ const App: Component = () => {
   });
 
   onCleanup(() => {
-    cleanup();
+    ws.cleanup();
     previewStream?.destroy();
   });
 
@@ -111,14 +111,10 @@ const App: Component = () => {
     }
   };
 
-  const handleStop = async () => {
-    try {
-      setError('');
-      setFps(0);
-      await stopPipeline();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to stop');
-    }
+  const handleStop = () => {
+    setError('');
+    setFps(0);
+    ws.send('stop');
   };
 
   const handleCropChange = (id: string, crop: CropRegion) => {
@@ -207,7 +203,7 @@ const App: Component = () => {
 
       <div class="bottom-bar">
         <div class="waveform-footer">
-          <Waveform height={64} src={isRunning() ? '/api/preview/input' : undefined} />
+          <FpsChart height={64} fps={fps()} />
         </div>
         <ConfigActions onConfigLoaded={fetchConfig} />
       </div>
