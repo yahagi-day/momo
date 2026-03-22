@@ -17,7 +17,7 @@ use state::AppState;
 /// - If `frontend/dist/index.html` exists during build, the SolidJS SPA is embedded.
 /// - Otherwise, a self-contained fallback HTML is embedded.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/api/config", get(handlers::config::get_config).put(handlers::config::put_config))
         .route("/api/config/output/{id}", put(handlers::config::patch_output))
         .route("/api/config/save", post(handlers::config::save_config))
@@ -28,7 +28,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/pipeline/stop", post(handlers::pipeline::stop_pipeline))
         .route("/ws/status", get(handlers::ws::ws_handler))
         .route("/api/preview/input", get(handlers::preview::preview_input))
-        .route("/api/preview/output/{id}", get(handlers::preview::preview_output))
+        .route("/api/preview/output/{id}", get(handlers::preview::preview_output));
+
+    #[cfg(feature = "webrtc")]
+    let router = router.route("/ws/preview", get(handlers::webrtc_ws::ws_preview_handler));
+
+    router
         .fallback(embedded_ui::index_handler)
         .layer(CorsLayer::permissive())
         .with_state(state)

@@ -2,6 +2,7 @@ import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
 import type { Config, PipelineState, CropRegion, OutputConfig } from './api/types';
 import { getStatus, getConfig, putConfig, startPipeline } from './api/client';
 import { connectWebSocket } from './api/websocket';
+import { PreviewStream } from './api/webrtc';
 import StatusBar from './components/StatusBar';
 import InputPanel from './components/InputPanel';
 import OutputList from './components/OutputList';
@@ -16,6 +17,9 @@ const App: Component = () => {
   const [config, setConfig] = createSignal<Config | null>(null);
   const [error, setError] = createSignal('');
   const [selectedOutputId, setSelectedOutputId] = createSignal<string | null>(null);
+  const [webrtcStreams, setWebrtcStreams] = createSignal<Record<string, MediaStream>>({});
+
+  let previewStream: PreviewStream | null = null;
 
   const fetchState = async () => {
     try {
@@ -35,15 +39,51 @@ const App: Component = () => {
     }
   };
 
+  const setupWebRTC = () => {
+    if (!PreviewStream.isSupported()) return;
+
+    previewStream = new PreviewStream((streamId, stream) => {
+      setWebrtcStreams((prev) => {
+        const next = { ...prev };
+        if (stream) {
+          next[streamId] = stream;
+        } else {
+          delete next[streamId];
+        }
+        return next;
+      });
+    });
+    previewStream.connect();
+  };
+
+  const subscribeWebRTCPreviews = () => {
+    if (!previewStream) return;
+    if (state() !== 'Running') return;
+    const cfg = config();
+
+    previewStream.subscribe('input');
+    if (cfg) {
+      for (const output of cfg.outputs) {
+        previewStream.subscribe(output.id);
+      }
+    }
+  };
+
   onMount(() => {
     fetchState();
     fetchConfig();
+    setupWebRTC();
   });
 
   const ws = connectWebSocket((event) => {
     switch (event.type) {
       case 'StateChanged':
-        if (event.state) setState(event.state);
+        if (event.state) {
+          setState(event.state);
+          if (event.state === 'Running') {
+            subscribeWebRTCPreviews();
+          }
+        }
         break;
       case 'FpsUpdate':
         if (event.fps !== undefined) setFps(event.fps);
@@ -57,7 +97,10 @@ const App: Component = () => {
     }
   });
 
-  onCleanup(ws.cleanup);
+  onCleanup(() => {
+    ws.cleanup();
+    previewStream?.destroy();
+  });
 
   const handleStart = async () => {
     try {
@@ -101,6 +144,10 @@ const App: Component = () => {
 
   const isRunning = () => state() === 'Running';
 
+  const getWebRTCStream = (streamId: string): MediaStream | null => {
+    return webrtcStreams()[streamId] ?? null;
+  };
+
   return (
     <div class="app">
       <StatusBar state={state()} fps={fps()} onStart={handleStart} onStop={handleStop} />
@@ -129,6 +176,7 @@ const App: Component = () => {
             }>
               <CropOverlay
                 src="/api/preview/input"
+                webrtcStream={getWebRTCStream('input')}
                 outputs={config()?.outputs ?? []}
                 inputRes={getInputResolution(config()!.input)}
                 selectedOutputId={selectedOutputId()}
@@ -149,6 +197,7 @@ const App: Component = () => {
           pipelineRunning={isRunning()}
           onAddOutput={handleAddOutput}
           onRemoveOutput={handleRemoveOutput}
+          getWebRTCStream={getWebRTCStream}
         />
       </div>
 

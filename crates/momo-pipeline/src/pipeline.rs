@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use momo_core::config::{Config, OutputConfig};
 use momo_core::error::{Error, Result};
+use momo_core::frame::Frame;
 use momo_core::types::{OutputTransform, PipelineState};
 use tokio::sync::broadcast;
 
@@ -22,6 +23,9 @@ pub struct Pipeline {
     event_tx: broadcast::Sender<PipelineEvent>,
     preview_tx: broadcast::Sender<Vec<u8>>,
     output_preview_txs: HashMap<String, broadcast::Sender<Vec<u8>>>,
+    /// Raw frame broadcast for WebRTC (Arc<Frame> instead of encoded JPEG)
+    raw_preview_tx: broadcast::Sender<Arc<Frame>>,
+    raw_output_preview_txs: HashMap<String, broadcast::Sender<Arc<Frame>>>,
     running: Option<RunningState>,
 }
 
@@ -36,13 +40,16 @@ impl Pipeline {
     pub fn new() -> Self {
         let (event_tx, _) = broadcast::channel(64);
         let (preview_tx, _) = broadcast::channel(4);
+        let (raw_preview_tx, _) = broadcast::channel(4);
         Self {
             state: PipelineState::Stopped,
             config: None,
             config_path: None,
             event_tx,
             preview_tx,
+            raw_preview_tx,
             output_preview_txs: HashMap::new(),
+            raw_output_preview_txs: HashMap::new(),
             running: None,
         }
     }
@@ -65,6 +72,21 @@ impl Pipeline {
 
     pub fn subscribe_output_preview(&self, id: &str) -> Option<broadcast::Receiver<Vec<u8>>> {
         self.output_preview_txs.get(id).map(|tx| tx.subscribe())
+    }
+
+    /// Subscribe to raw input frames (for WebRTC).
+    pub fn subscribe_raw_preview(&self) -> broadcast::Receiver<Arc<Frame>> {
+        self.raw_preview_tx.subscribe()
+    }
+
+    /// Subscribe to raw output frames (for WebRTC).
+    pub fn subscribe_raw_output_preview(
+        &self,
+        id: &str,
+    ) -> Option<broadcast::Receiver<Arc<Frame>>> {
+        self.raw_output_preview_txs
+            .get(id)
+            .map(|tx| tx.subscribe())
     }
 
     pub fn set_config(&mut self, config: Config) -> Result<()> {
@@ -109,7 +131,7 @@ impl Pipeline {
         let (output_configs_tx, mut output_configs_rx) =
             tokio::sync::watch::channel(output_configs.clone());
 
-        // Create per-output preview channels
+        // Create per-output preview channels (JPEG for MJPEG)
         let mut output_preview_txs_map = HashMap::new();
         let mut output_preview_txs_task = HashMap::new();
         for output in &output_configs {
@@ -118,6 +140,16 @@ impl Pipeline {
             output_preview_txs_map.insert(output.id.clone(), tx);
         }
         self.output_preview_txs = output_preview_txs_map;
+
+        // Create per-output raw frame channels (for WebRTC)
+        let mut raw_output_preview_txs_map = HashMap::new();
+        let mut raw_output_preview_txs_task = HashMap::new();
+        for output in &output_configs {
+            let (tx, _) = broadcast::channel(4);
+            raw_output_preview_txs_task.insert(output.id.clone(), tx.clone());
+            raw_output_preview_txs_map.insert(output.id.clone(), tx);
+        }
+        self.raw_output_preview_txs = raw_output_preview_txs_map;
 
         // Create and start DeckLink outputs (feature-gated)
         #[cfg(feature = "decklink")]
@@ -148,6 +180,7 @@ impl Pipeline {
         // Frame loop on dedicated OS thread — receives directly from crossbeam,
         // no async scheduling overhead
         let preview_tx = self.preview_tx.clone();
+        let raw_preview_tx = self.raw_preview_tx.clone();
         let event_tx = self.event_tx.clone();
         let preview_config = config.preview.clone();
         let loop_stop = stop_flag.clone();
@@ -218,12 +251,18 @@ impl Pipeline {
                             && encoding_flag
                                 .is_none_or(|f| !f.load(Ordering::Relaxed));
 
+                        // Check if raw output preview has subscribers (WebRTC)
+                        let needs_raw_preview = should_encode_output_preview
+                            && raw_output_preview_txs_task
+                                .get(&output.id)
+                                .is_some_and(|tx| tx.receiver_count() > 0);
+
                         #[cfg(feature = "decklink")]
                         let needs_decklink = output_players.contains_key(&output.id);
                         #[cfg(not(feature = "decklink"))]
                         let needs_decklink = false;
 
-                        if !needs_preview && !needs_decklink {
+                        if !needs_preview && !needs_decklink && !needs_raw_preview {
                             continue;
                         }
 
@@ -247,6 +286,15 @@ impl Pipeline {
                                                 output_id = %output.id,
                                                 "DeckLink output error: {e}"
                                             );
+                                        }
+                                    }
+
+                                    // Raw frame broadcast for WebRTC
+                                    if needs_raw_preview {
+                                        if let Some(tx) =
+                                            raw_output_preview_txs_task.get(&output.id)
+                                        {
+                                            let _ = tx.send(Arc::new(transformed.clone()));
                                         }
                                     }
 
@@ -284,30 +332,45 @@ impl Pipeline {
 
                         // Without DeckLink: transform + encode in spawn_blocking
                         #[cfg(not(feature = "decklink"))]
-                        if needs_preview {
-                            if let Some(tx) = output_preview_txs_task.get(&output.id) {
-                                let flag = encoding_flag.cloned();
-                                if let Some(ref f) = flag {
-                                    f.store(true, Ordering::Relaxed);
-                                }
-                                let frame = frame.clone();
-                                let transform = output.transform.clone();
-                                let pc = preview_config.clone();
-                                let tx = tx.clone();
-                                let gpu = gpu.clone();
-                                handle.spawn_blocking(move || {
-                                    if let Ok(transformed) =
-                                        gpu.process(&frame, &transform, output_resolution)
+                        {
+                            if needs_raw_preview {
+                                if let Ok(transformed) =
+                                    gpu.process(&frame, &output.transform, output_resolution)
+                                {
+                                    if let Some(tx) =
+                                        raw_output_preview_txs_task.get(&output.id)
                                     {
-                                        if let Ok(jpeg) = encode_preview(&transformed, &pc)
+                                        let _ = tx.send(Arc::new(transformed));
+                                    }
+                                }
+                            }
+
+                            if needs_preview {
+                                if let Some(tx) = output_preview_txs_task.get(&output.id) {
+                                    let flag = encoding_flag.cloned();
+                                    if let Some(ref f) = flag {
+                                        f.store(true, Ordering::Relaxed);
+                                    }
+                                    let frame = frame.clone();
+                                    let transform = output.transform.clone();
+                                    let pc = preview_config.clone();
+                                    let tx = tx.clone();
+                                    let gpu = gpu.clone();
+                                    handle.spawn_blocking(move || {
+                                        if let Ok(transformed) =
+                                            gpu.process(&frame, &transform, output_resolution)
                                         {
-                                            let _ = tx.send(jpeg);
+                                            if let Ok(jpeg) =
+                                                encode_preview(&transformed, &pc)
+                                            {
+                                                let _ = tx.send(jpeg);
+                                            }
                                         }
-                                    }
-                                    if let Some(f) = flag {
-                                        f.store(false, Ordering::Relaxed);
-                                    }
-                                });
+                                        if let Some(f) = flag {
+                                            f.store(false, Ordering::Relaxed);
+                                        }
+                                    });
+                                }
                             }
                         }
                     }
@@ -316,7 +379,7 @@ impl Pipeline {
                         last_output_preview_time = now;
                     }
 
-                    // Input preview encode
+                    // Input preview encode (MJPEG)
                     let should_encode_input_preview =
                         now.duration_since(last_input_preview_time) >= preview_interval;
                     if should_encode_input_preview
@@ -335,6 +398,11 @@ impl Pipeline {
                             }
                             enc_flag.store(false, Ordering::Relaxed);
                         });
+                    }
+
+                    // Raw input frame broadcast for WebRTC (throttled at preview FPS)
+                    if should_encode_input_preview && raw_preview_tx.receiver_count() > 0 {
+                        let _ = raw_preview_tx.send(Arc::new(frame));
                     }
                 }
 
@@ -373,6 +441,7 @@ impl Pipeline {
         }
 
         self.output_preview_txs.clear();
+        self.raw_output_preview_txs.clear();
         self.state = PipelineState::Stopped;
         self.emit(PipelineEvent::StateChanged { state: self.state });
 

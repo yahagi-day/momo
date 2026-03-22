@@ -1,0 +1,18 @@
+[package]
+name = "momo-webrtc"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+webrtc = ["dep:str0m", "dep:openh264"]
+
+[dependencies]
+momo-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+str0m = { version = "0.7", optional = true }
+openh264 = { version = "0.6", features = ["source"], optional = true }

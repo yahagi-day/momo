@@ -3,11 +3,16 @@ name = "momo-web"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+webrtc = ["momo-webrtc/webrtc"]
+
 [dependencies]
 momo-core = { workspace = true }
 momo-decklink = { workspace = true }
 momo-uvc = { workspace = true }
 momo-pipeline = { workspace = true }
+momo-webrtc = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 tokio = { workspace = true }
 serde = { workspace = true }

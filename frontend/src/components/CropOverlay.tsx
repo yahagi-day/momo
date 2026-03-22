@@ -1,10 +1,11 @@
-import { Component, For, createSignal, onMount, onCleanup } from 'solid-js';
+import { Component, For, Show, createSignal, createEffect, onMount, onCleanup } from 'solid-js';
 import type { OutputConfig, CropRegion } from '../api/types';
 import { computePreviewRect, OUTPUT_COLORS, type Resolution, type PreviewRect } from '../utils/coordinates';
 import CropRect from './CropRect';
 
 interface Props {
   src: string;
+  webrtcStream?: MediaStream | null;
   outputs: OutputConfig[];
   inputRes: Resolution;
   selectedOutputId: string | null;
@@ -14,6 +15,7 @@ interface Props {
 
 const CropOverlay: Component<Props> = (props) => {
   let containerRef!: HTMLDivElement;
+  let videoRef!: HTMLVideoElement;
   const [previewRect, setPreviewRect] = createSignal<PreviewRect>({ x: 0, y: 0, width: 0, height: 0 });
 
   const updateRect = () => {
@@ -25,6 +27,12 @@ const CropOverlay: Component<Props> = (props) => {
     }
   };
 
+  createEffect(() => {
+    if (videoRef && props.webrtcStream) {
+      videoRef.srcObject = props.webrtcStream;
+    }
+  });
+
   onMount(() => {
     const observer = new ResizeObserver(updateRect);
     observer.observe(containerRef);
@@ -33,7 +41,8 @@ const CropOverlay: Component<Props> = (props) => {
 
   const handleContainerClick = (e: MouseEvent) => {
     if (props.selectedOutputId) return;
-    if (e.target === containerRef || (e.target as HTMLElement).tagName === 'IMG') {
+    const tag = (e.target as HTMLElement).tagName;
+    if (e.target === containerRef || tag === 'IMG' || tag === 'VIDEO') {
       props.onSelectOutput(null);
     }
   };
@@ -44,13 +53,29 @@ const CropOverlay: Component<Props> = (props) => {
       class="crop-overlay-container"
       onClick={handleContainerClick}
     >
-      <img
-        class="preview-img"
-        src={props.src}
-        alt="Input preview"
-        onLoad={updateRect}
-        draggable={false}
-      />
+      <Show
+        when={props.webrtcStream}
+        fallback={
+          <img
+            class="preview-img"
+            src={props.src}
+            alt="Input preview"
+            onLoad={updateRect}
+            draggable={false}
+          />
+        }
+      >
+        <video
+          ref={videoRef}
+          class="preview-img"
+          autoplay
+          playsinline
+          muted
+          onLoadedMetadata={updateRect}
+          draggable={false}
+          style={{ "object-fit": "contain" }}
+        />
+      </Show>
       <For each={props.outputs}>
         {(output, index) => {
           const crop = () => output.transform.crop;

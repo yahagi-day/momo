@@ -1,4 +1,4 @@
-import { Component, Show, createSignal } from 'solid-js';
+import { Component, Show, createSignal, createEffect } from 'solid-js';
 import type { OutputConfig, CropRegion } from '../api/types';
 import { updateOutput } from '../api/client';
 
@@ -11,13 +11,21 @@ interface Props {
   onCropChange: (id: string, crop: CropRegion) => void;
   pipelineRunning: boolean;
   onRemove?: (id: string) => void;
+  webrtcStream?: MediaStream | null;
 }
 
 const OutputCard: Component<Props> = (props) => {
+  let videoRef!: HTMLVideoElement;
   const [flipH, setFlipH] = createSignal(props.output.transform.flip.horizontal);
   const [flipV, setFlipV] = createSignal(props.output.transform.flip.vertical);
   const [error, setError] = createSignal('');
   const [editing, setEditing] = createSignal(false);
+
+  createEffect(() => {
+    if (videoRef && props.webrtcStream) {
+      videoRef.srcObject = props.webrtcStream;
+    }
+  });
 
   const crop = () => props.output.transform.crop;
   const hasCrop = () => crop() != null;
@@ -101,7 +109,20 @@ const OutputCard: Component<Props> = (props) => {
 
       <Show when={props.pipelineRunning}>
         <div class="output-preview">
-          <img src={`/api/preview/output/${props.output.id}`} alt={`${props.output.name} preview`} />
+          <Show
+            when={props.webrtcStream}
+            fallback={
+              <img src={`/api/preview/output/${props.output.id}`} alt={`${props.output.name} preview`} />
+            }
+          >
+            <video
+              ref={videoRef}
+              autoplay
+              playsinline
+              muted
+              style={{ width: "100%", height: "100%", "object-fit": "contain" }}
+            />
+          </Show>
         </div>
       </Show>
 
