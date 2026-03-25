@@ -44,6 +44,7 @@ impl InputDriver {
                     30,
                 )))
             }
+            #[allow(unreachable_patterns)]
             _ => Err(Error::Pipeline(
                 "unsupported input source (hardware not available)".into(),
             )),
