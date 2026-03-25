@@ -19,6 +19,7 @@ cargo run -- --config path.json --port 9090  # custom config and port
 cargo build --features decklink      # build with DeckLink hardware support
 cargo build --features uvc           # build with UVC camera support
 cargo build --features gpu           # build with CUDA GPU processing
+cargo build --features webrtc        # build with WebRTC preview support
 ```
 
 Frontend (requires Node.js, optional — fallback HTML is embedded without it):
@@ -30,7 +31,7 @@ cd frontend && npm run dev                   # dev server with proxy to :8080
 
 ## Architecture
 
-Cargo workspace with 7 crates. Dependency flow is strictly one-directional:
+Cargo workspace with 8 crates. Dependency flow is strictly one-directional:
 
 ```
 momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode, etc.)
@@ -38,17 +39,18 @@ momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode,
   ├── momo-decklink   DeckLink FFI via cxx — device enumeration, input capture, output (feature-gated)
   ├── momo-uvc        UVC camera input via nokhwa (feature-gated)
   ├── momo-gpu        GPU processing: crop/scale/flip with CPU fallback (CUDA feature-gated)
+  ├── momo-webrtc     WebRTC preview via str0m + OpenH264 H.264 encoding (feature-gated)
   │
   ├── momo-pipeline   frame routing: input → GPU → N outputs (uses decklink, uvc, gpu)
   │     ↑
-  │     └── momo-web  axum REST API + WebSocket + MJPEG preview
+  │     └── momo-web  axum REST API + WebSocket + MJPEG/WebRTC preview (uses webrtc)
   │           ↑
   └───────── momo-app  binary entry point (clap CLI, tracing init, wires everything)
 ```
 
 **Threading model**: Mock/hardware input runs on a dedicated OS thread. A bridge task (`tokio::task::spawn_blocking`) forwards frames from `crossbeam-channel` to `tokio::sync::mpsc` (100ms recv timeout). Preview encoding and FPS tracking run as a single tokio task. Web/API runs on the tokio async runtime.
 
-**Frame flow**: Input thread → crossbeam channel (bounded 4) → bridge task → tokio mpsc (bounded 2) → [per-output: GpuProcessor::process() crop→scale→flip → DeckLink output (feature-gated) + per-output preview broadcast channel] + [input preview task (UYVY→RGB→scale→JPEG via `spawn_blocking`) → `broadcast::Sender<Vec<u8>>` (capacity 4) → MJPEG endpoint].
+**Frame flow**: Input thread → crossbeam channel (bounded 4) → bridge task → tokio mpsc (bounded 2) → [per-output: GpuProcessor::process() crop→scale→flip → DeckLink output (feature-gated) + per-output preview broadcast channel] + [input preview task (UYVY→RGB→scale→JPEG via `spawn_blocking`) → `broadcast::Sender<Vec<u8>>` (capacity 4) → MJPEG endpoint] + [raw frame broadcast → `broadcast::Sender<Arc<Frame>>` → WebRTC H.264 encoding (feature-gated)].
 
 **Event flow**: Pipeline state changes and FPS updates → `broadcast::Sender<PipelineEvent>` (capacity 64) → WebSocket handler forwards as JSON.
 
@@ -64,8 +66,9 @@ momo-core          shared types (Frame, Config, Error, PixelFormat, DisplayMode,
 | momo-decklink | **Working** | cxx FFI bridge, feature-gated (`--features decklink`). Input capture, output, device enumeration. Stub without feature. |
 | momo-uvc | **Working** | Feature-gated (`--features uvc`). nokhwa capture, YUYV→UYVY conversion. Stub without feature. |
 | momo-gpu | **Working** | CUDA kernels (crop/scale/flip) with CPU fallback. PTX compiled at build time by nvcc. Feature-gated (`--features gpu`). |
-| momo-pipeline | **Working** | Mock input, preview encode, FPS tracking, per-output preview, DeckLink output integration (feature-gated) |
-| momo-web | **Working** | All endpoints, WebSocket, MJPEG input+output preview, embedded UI |
+| momo-webrtc | **Working** | WebRTC preview streaming, H.264 via OpenH264 + str0m. Feature-gated (`--features webrtc`). Signal types always available. |
+| momo-pipeline | **Working** | Mock input, preview encode, FPS tracking, per-output preview, raw frame broadcast for WebRTC, DeckLink output integration (feature-gated) |
+| momo-web | **Working** | All endpoints, WebSocket, MJPEG input+output preview, WebRTC signaling WS (feature-gated), embedded UI |
 | momo-app | **Working** | CLI, config loading, default config generation |
 | frontend | **Working** | SolidJS SPA + vanilla JS fallback |
 
@@ -83,13 +86,15 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"                                                    # ws feature added in momo-web
 crossbeam-channel = "0.5"
 cxx = "1"
-cudarc = { version = "0.16", features = ["driver", "cuda-version-from-build-system"], optional = true }
-nokhwa = { version = "0.10", features = ["input-native"], optional = true }
+cudarc = { version = "0.16", features = ["driver", "cuda-version-from-build-system"] }
+nokhwa = { version = "0.10", features = ["input-native"] }
 clap = { version = "4", features = ["derive"] }
 tower-http = { version = "0.6", features = ["cors"] }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 async-stream = "0.3"
 ```
+
+Crate-level dependencies (not workspace-shared): `str0m = "0.7"` and `openh264 = { version = "0.6", features = ["source"] }` in momo-webrtc (optional, behind `webrtc` feature).
 
 Dev dependencies (momo-web only): `tower = "0.5"` (util), `http-body-util = "0.1"` for endpoint testing via `tower::ServiceExt::oneshot`.
 
@@ -106,7 +111,7 @@ Build dependencies (momo-gpu): `build.rs` compiles `.cu` kernels to PTX via `nvc
 - **`OutputConfig`** — `id`, `name`, `device_index`, `display_mode`, `pixel_format`, `transform: OutputTransform`, `enabled` (default true).
 - **`OutputTransform`** — `crop: Option<CropRegion>`, `flip: FlipOptions` (horizontal/vertical bools).
 - **`PreviewConfig`** — `width` (640), `height` (360), `fps` (10), `jpeg_quality` (75).
-- **`Frame`** — `data: Vec<u8>`, `resolution: Resolution`, `format: PixelFormat`, `timestamp_ns: u64`, `sequence: u64`.
+- **`Frame`** — `data: Arc<Vec<u8>>`, `resolution: Resolution`, `format: PixelFormat`, `timestamp_ns: u64`, `sequence: u64`. Data wrapped in `Arc` for zero-copy sharing across broadcast channels.
 - **`PixelFormat`** — `Uyvy` (2 bytes/px), `Bgra` (4 bytes/px), `V210` (10-bit).
 - **`DisplayMode`** — 19 DeckLink modes (720p/1080i/1080p/4K at various rates). Methods: `resolution()`, `frame_rate()`.
 - **`PipelineState`** — `Stopped`, `Starting`, `Running`, `Stopping`, `Error`.
@@ -143,19 +148,29 @@ Build dependencies (momo-gpu): `build.rs` compiles `.cu` kernels to PTX via `nvc
 - **`convert`** module — `yuyv_to_uyvy()`: byte-swap conversion (always available).
 - **`enumerate_devices()`** — with `uvc` feature: queries via `nokhwa::query()`. Without: returns empty Vec.
 
+### momo-webrtc
+
+- **Feature flag**: `webrtc` — enables `str0m` (WebRTC) + `openh264` (H.264 encoding). Default OFF. Propagates: `momo-app/webrtc` → `momo-web/webrtc` → `momo-webrtc/webrtc`. Signal types (`signal` module) and `convert` module are always available (no feature gate).
+- **`WebRtcManager`** — creates sessions with a `SubscribeFn` callback to subscribe to pipeline raw frames. Held in `AppState` as `Arc<WebRtcManager>`.
+- **`SessionHandle`** — handle for an active session: `signal_tx` (client→session), `signal_rx` (session→client), spawned tokio task.
+- **`run_session()`** (feature-gated) — async function managing str0m `Rtc` instance, UDP socket, H.264 encoding via OpenH264, and frame delivery from pipeline broadcast channels.
+- **`H264Encoder`** (feature-gated) — wraps OpenH264 encoder, converts NV12 frames to H.264 `EncodedPacket`s.
+- **`signal`** module — `ClientMessage` enum (`Answer`, `IceCandidate`, `SubscribeTrack`, `UnsubscribeTrack`) and `ServerMessage` enum (`Offer`, `IceCandidate`, `TrackAdded`, `TrackRemoved`, `Error`). Both use `#[serde(tag = "type")]`.
+- **`convert`** module — `uyvy_to_nv12()`: UYVY 4:2:2 → NV12 4:2:0 conversion for H.264 encoding.
+
 ### momo-pipeline
 
-- **`Pipeline`** — fields: `state`, `config: Option<Config>`, `config_path: Option<PathBuf>`, `event_tx: broadcast::Sender<PipelineEvent>`, `preview_tx: broadcast::Sender<Vec<u8>>`, `output_preview_txs: HashMap<String, broadcast::Sender<Vec<u8>>>`, `running: Option<RunningState>`. Methods: `new()`, `state()`, `config()`, `subscribe()`, `subscribe_preview()`, `subscribe_output_preview(id)`, `set_config()`, `set_config_path()`, `start()`, `stop()`, `save_config()`, `load_config()`, `update_output()`, `outputs()`.
+- **`Pipeline`** — fields: `state`, `config: Option<Config>`, `config_path: Option<PathBuf>`, `event_tx: broadcast::Sender<PipelineEvent>`, `preview_tx: broadcast::Sender<Vec<u8>>`, `output_preview_txs: HashMap<String, broadcast::Sender<Vec<u8>>>`, `raw_preview_tx: broadcast::Sender<Arc<Frame>>`, `raw_output_preview_txs: HashMap<String, broadcast::Sender<Arc<Frame>>>`, `running: Option<RunningState>`. Methods: `new()`, `state()`, `config()`, `subscribe()`, `subscribe_preview()`, `subscribe_output_preview(id)`, `subscribe_raw_preview()`, `subscribe_raw_output_preview(id)`, `set_config()`, `set_config_path()`, `start()`, `stop()`, `save_config()`, `load_config()`, `update_output()`, `outputs()`.
 - **Per-output preview**: `start()` creates per-output broadcast channels. Frame loop encodes output previews throttled at `PreviewConfig.fps`, skipping encode when `receiver_count() == 0`. Channels cleared on `stop()`.
 - **DeckLink output** (feature-gated): `start()` creates and starts `DeckLinkOutput` per enabled output. Frame loop calls `VideoOutput::send_frame()` after GPU transform. Outputs stopped gracefully on task completion.
 - **`PipelineEvent`** — `StateChanged { state }`, `FpsUpdate { fps: f64 }`, `DeviceEvent { device, status }`, `ConfigChanged`, `Error { message }`. Serialized as tagged JSON.
 - **`InputDriver`** — enum: `Mock(MockInput)`, `DeckLink(DeckLinkInput)` (feature-gated), `Uvc(UvcInput)` (feature-gated). Factory: `from_config(&InputSource)`.
 - **`MockInput`** — generates UYVY color bars (SMPTE 8-bar pattern: White/Yellow/Cyan/Green/Magenta/Red/Blue/Black). Runs on dedicated OS thread at configured FPS. Stop via `Arc<AtomicBool>`.
-- **`preview.rs`** — `uyvy_to_rgb()` (BT.601 coefficients), `nearest_neighbor_scale()`, `encode_preview()` (→ JPEG via `image::codecs::jpeg::JpegEncoder`).
+- **`preview.rs`** — `uyvy_to_rgb()` (BT.601 coefficients), `nearest_neighbor_scale()`, `encode_preview()` (→ JPEG via `image::codecs::jpeg::JpegEncoder`), `uyvy_to_nv12()` (UYVY 4:2:2 → NV12 4:2:0 for WebRTC H.264).
 
 ### momo-web
 
-- **`AppState`** — `pipeline: Arc<RwLock<Pipeline>>`. Constructor: `new(pipeline)`.
+- **`AppState`** — `pipeline: Arc<RwLock<Pipeline>>`, `webrtc_manager: Arc<WebRtcManager>` (feature-gated). Constructor: `new(pipeline)` — with `webrtc` feature, creates `WebRtcManager` with a `SubscribeFn` that bridges to `subscribe_raw_preview()` / `subscribe_raw_output_preview()`.
 - **`AppError`** — wraps `momo_core::Error`. Maps: Config/Json→400, DeviceNotFound→404, Pipeline→409, others→500.
 - **`embedded_ui::index_handler()`** — serves `include_str!(concat!(env!("OUT_DIR"), "/index.html"))`.
 
@@ -180,9 +195,10 @@ GET    /api/devices               → DeviceInfo[] (currently empty)
 GET    /api/preview/input         → multipart/x-mixed-replace MJPEG stream
 GET    /api/preview/output/{id}   → multipart/x-mixed-replace MJPEG stream | 404
 WS     /ws/status                 → PipelineEvent JSON messages
+WS     /ws/preview                → WebRTC signaling (feature-gated: webrtc)
 ```
 
-## Tests (51 total)
+## Tests (60 total)
 
 **momo-core** (7): `config_serde_roundtrip`, `config_file_roundtrip`, `config_rejects_empty_outputs`, `config_rejects_duplicate_ids`, `config_rejects_zero_crop`, `config_defaults_applied`, `input_source_uvc_roundtrip`.
 
@@ -192,7 +208,9 @@ WS     /ws/status                 → PipelineEvent JSON messages
 
 **momo-uvc** (2): `yuyv_to_uyvy_basic`, `yuyv_to_uyvy_multiple_macropixels`.
 
-**momo-pipeline** (14): `color_bar_frame_size`, `color_bar_frame_small` (mock_input), `initial_state_is_stopped`, `set_config`, `update_output_transform`, `update_output_not_found`, `start_stop_lifecycle`, `start_without_config_fails`, `stop_when_stopped_fails`, `subscribe_preview` (waits 3s for JPEG frame), `subscribe_output_preview_lifecycle` (pipeline), `uyvy_to_rgb_known_values`, `nearest_neighbor_scale_halves`, `encode_preview_produces_jpeg` (preview).
+**momo-pipeline** (15): `color_bar_frame_size`, `color_bar_frame_small` (mock_input), `initial_state_is_stopped`, `set_config`, `update_output_transform`, `update_output_not_found`, `start_stop_lifecycle`, `start_without_config_fails`, `stop_when_stopped_fails`, `subscribe_preview` (waits 3s for JPEG frame), `subscribe_output_preview_lifecycle` (pipeline), `uyvy_to_rgb_known_values`, `uyvy_to_nv12_basic`, `nearest_neighbor_scale_halves`, `encode_preview_produces_jpeg` (preview).
+
+**momo-webrtc** (8): `client_answer_roundtrip`, `client_subscribe_roundtrip`, `client_ice_candidate_roundtrip`, `server_offer_roundtrip`, `server_ice_candidate_roundtrip`, `server_error_roundtrip` (signal), `uyvy_to_nv12_basic`, `uyvy_to_nv12_4x4` (convert).
 
 **momo-web** (11): `get_status_returns_stopped`, `get_config_returns_config`, `get_config_no_config_returns_400`, `put_config_sets_config`, `get_devices_returns_array`, `start_stop_pipeline`, `stop_when_stopped_returns_conflict`, `preview_output_returns_404_when_stopped`, `preview_output_returns_mjpeg_when_running`, `preview_input_returns_mjpeg_content_type`, `update_output_transform`.
 
@@ -200,13 +218,15 @@ WS     /ws/status                 → PipelineEvent JSON messages
 
 `frontend/` — SolidJS SPA with TypeScript. Uses `vite-plugin-singlefile` to produce a single HTML file for binary embedding. Dev proxy: `/api` → `:8080`, `/ws` → `ws://:8080`.
 
-**Components**: `App` (root, state management, WebSocket, single source of truth for config), `StatusBar` (state badge, FPS, start/stop), `InputPanel` (source label, MJPEG preview when running, hosts CropOverlay), `CropOverlay` (MJPEG preview + draggable/resizable crop rects per output, uses ResizeObserver + `object-fit: contain` coordinate mapping), `CropRect` (draggable/resizable crop rectangle with 8 handles, only interactive when `selected`), `OutputList`/`OutputCard` (per-output crop/flip editing with Edit Crop → Apply/Cancel flow, live output preview thumbnail when pipeline running), `PreviewImage` (img tag), `ConfigActions` (save/load buttons).
+**Components**: `App` (root, state management, WebSocket, single source of truth for config), `StatusBar` (state badge, FPS, start/stop), `InputPanel` (source label, MJPEG preview when running, hosts CropOverlay), `CropOverlay` (MJPEG preview + draggable/resizable crop rects per output, uses ResizeObserver + `object-fit: contain` coordinate mapping), `CropRect` (draggable/resizable crop rectangle with 8 handles, only interactive when `selected`), `OutputList`/`OutputCard` (per-output crop/flip editing with Edit Crop → Apply/Cancel flow, live output preview thumbnail when pipeline running), `PreviewImage` (img tag), `WebRTCPreview` (video element for WebRTC MediaStream with MJPEG fallback), `FpsChart` (real-time FPS visualization via canvas), `Waveform` (video-driven waveform analyzer), `ConfigActions` (save/load buttons).
 
 **Crop editing flow**: OutputCard "Edit Crop" → sets `editing` state + `selectedOutputId` → CropOverlay shows handles on selected rect → drag/resize calls `onCropChange` → App updates config signal (single source of truth) → OutputCard reads crop from `props.output.transform.crop` (no local crop state) → "Apply" sends to backend → "Cancel" reverts. Number inputs in OutputCard also call `onCropChange` to stay in sync with overlay.
 
 **Coordinate utils** (`src/utils/coordinates.ts`): `inputToPreview()` / `previewToInput()` convert between input pixel coords and preview CSS coords. `DISPLAY_MODE_RESOLUTIONS` maps mode names to resolutions. `OUTPUT_COLORS` palette for per-output coloring.
 
 **API client** (`src/api/client.ts`): `getStatus`, `getConfig`, `putConfig`, `updateOutput`, `saveConfig`, `loadConfig`, `startPipeline`, `stopPipeline`. All requests use `cache: 'no-store'` to prevent stale GET responses after mutations.
+
+**WebRTC client** (`src/api/webrtc.ts`): `PreviewStream` class — manages `RTCPeerConnection` and signaling via WebSocket to `/ws/preview`. Handles `SubscribeTrack`/`UnsubscribeTrack` for input and per-output streams.
 
 **WebSocket** (`src/api/websocket.ts`): auto-reconnect with 2s delay.
 
