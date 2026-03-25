@@ -8,6 +8,33 @@ use momo_core::types::{DisplayMode, OutputTransform, PixelFormat};
 use momo_pipeline::Pipeline;
 use momo_web::state::AppState;
 
+// ANSI color helpers
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const PINK: &str = "\x1b[38;5;205m";
+const GRAY: &str = "\x1b[38;5;244m";
+
+fn print_banner(addr: &str) {
+    let version = env!("CARGO_PKG_VERSION");
+
+    let decklink = if cfg!(feature = "decklink") { "on" } else { "off" };
+    let gpu = if cfg!(feature = "gpu") { "on" } else { "off" };
+    let webrtc = if cfg!(feature = "webrtc") { "on" } else { "off" };
+
+    println!("\n\
+  {BOLD}{PINK}  ███╗   ███╗  ██████╗  ███╗   ███╗  ██████╗{RESET}\n\
+  {BOLD}{PINK}  ████╗ ████║ ██╔═══██╗ ████╗ ████║ ██╔═══██╗{RESET}\n\
+  {BOLD}{PINK}  ██╔████╔██║ ██║   ██║ ██╔████╔██║ ██║   ██║{RESET}\n\
+  {BOLD}{PINK}  ██║╚██╔╝██║ ██║   ██║ ██║╚██╔╝██║ ██║   ██║{RESET}\n\
+  {BOLD}{PINK}  ██║ ╚═╝ ██║ ╚██████╔╝ ██║ ╚═╝ ██║ ╚██████╔╝{RESET}\n\
+  {BOLD}{PINK}  ╚═╝     ╚═╝  ╚═════╝  ╚═╝     ╚═╝  ╚═════╝{RESET}\n\
+  {GRAY}v{version} — live video splitter{RESET}\n\
+\n\
+  {PINK}◆{RESET} DeckLink: {decklink}  {PINK}◆{RESET} GPU: {gpu}  {PINK}◆{RESET} WebRTC: {webrtc}\n\
+  {PINK}◆{RESET} Server: {addr}\n\
+    ");
+}
+
 /// momo — live video splitter/router
 #[derive(Parser, Debug)]
 #[command(name = "momo", version, about)]
@@ -56,7 +83,8 @@ async fn main() {
         .init();
 
     let args = Args::parse();
-    tracing::info!("momo starting with config: {}", args.config);
+    let addr = format!("{}:{}", args.bind, args.port);
+    print_banner(&addr);
 
     let mut pipeline = Pipeline::new();
 
@@ -81,9 +109,6 @@ async fn main() {
 
     let state = AppState::new(pipeline);
     let app = momo_web::build_router(state);
-
-    let addr = format!("{}:{}", args.bind, args.port);
-    tracing::info!("listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
