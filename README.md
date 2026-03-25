@@ -27,16 +27,15 @@ Live video splitter/router that captures a single video input (DeckLink / UVC / 
 ## Build & Run
 
 ```bash
-cargo build                          # build all crates (CPU fallback)
-cargo build --features gpu           # build with CUDA GPU processing (requires CUDA Toolkit)
-cargo build --features decklink      # build with DeckLink hardware support (requires DeckLink SDK)
-cargo build --features webrtc        # build with WebRTC preview support
-cargo build --features gpu,decklink  # build with all hardware features
+cargo build                          # build with all features (DeckLink + UVC + GPU + WebRTC)
 cargo run                            # start server (default: 0.0.0.0:8080)
 cargo run -- --config path.json --port 9090
 cargo test                           # run all tests
 cargo clippy -- -D warnings          # lint
+cargo build --no-default-features    # build without hardware/GPU/WebRTC features
 ```
+
+Requires CUDA Toolkit (for GPU) and DeckLink SDK headers (for DeckLink). Hardware is not required at runtime — features degrade gracefully.
 
 Frontend (optional — a fallback UI is embedded in the binary):
 
@@ -120,7 +119,7 @@ POST   /api/pipeline/stop        Stop pipeline
 GET    /api/preview/input        Input MJPEG stream
 GET    /api/preview/output/:id   Per-output MJPEG stream (transformed)
 WS     /ws/status                WebSocket: state changes, FPS, device events
-WS     /ws/preview               WebRTC signaling (feature-gated: webrtc)
+WS     /ws/preview               WebRTC signaling
 ```
 
 ## Web UI
@@ -130,7 +129,7 @@ WS     /ws/preview               WebRTC signaling (feature-gated: webrtc)
 - **Output cards**: per-output transform settings (crop, flip) with apply button + live output preview thumbnail
 - **Config actions**: save/load configuration files
 - **Real-time updates**: WebSocket-driven state and FPS
-- **WebRTC preview**: Low-latency H.264 video preview (with `webrtc` feature), MJPEG fallback
+- **WebRTC preview**: Low-latency H.264 video preview, MJPEG fallback
 - **FPS chart**: Real-time FPS visualization
 - **Waveform**: Video-driven waveform analyzer
 
@@ -149,7 +148,7 @@ The UI HTML is embedded into the binary at compile time. If the SolidJS frontend
 | DeckLink FFI | `cxx` crate | Safer than bindgen for COM-like C++ APIs |
 | GPU | `cudarc` + nvcc PTX | Safe CUDA from Rust, kernels loaded as PTX |
 | Web | axum + SolidJS | axum is tokio-native; SolidJS for reactive real-time UI |
-| Preview | MJPEG + WebRTC (H.264) | MJPEG for compatibility, WebRTC for low-latency (feature-gated) |
+| Preview | MJPEG + WebRTC (H.264) | MJPEG for compatibility, WebRTC for low-latency |
 | WebRTC | str0m + OpenH264 | Pure-Rust WebRTC stack, H.264 encoding via OpenH264 |
 | Thread bridging | crossbeam-channel | Connects video OS threads with tokio async runtime |
 | Config | serde_json | JSON serialization/deserialization |
