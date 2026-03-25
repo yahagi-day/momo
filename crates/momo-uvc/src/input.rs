@@ -81,7 +81,7 @@ impl UvcInput {
                 while !stop_flag.load(Ordering::Relaxed) {
                     match camera.frame_raw() {
                         Ok(buf) => {
-                            let data = yuyv_to_uyvy(buf.buffer());
+                            let data = yuyv_to_uyvy(&buf);
                             let frame = Frame {
                                 data: std::sync::Arc::new(data),
                                 resolution: Resolution {
