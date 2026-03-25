@@ -26,16 +26,11 @@
 
 ```bash
 git clone https://github.com/yahagi-day/momo.git && cd momo
-cargo build
-cargo run   # => http://localhost:8080
+cargo build   # all features enabled by default (DeckLink + UVC + GPU + WebRTC)
+cargo run     # => http://localhost:8080
 ```
 
-With hardware features:
-
-```bash
-cargo build --features gpu,decklink,webrtc
-cargo run -- --config my-config.json --port 9090
-```
+Requires CUDA Toolkit and DeckLink SDK headers at build time. Hardware is not required at runtime — features degrade gracefully. Use `cargo build --no-default-features` to build without them.
 
 Frontend (optional — fallback UI is embedded in the binary):
 
@@ -63,7 +58,7 @@ GPU Engine ── crop → scale → flip
 
 ### Feature Flags
 
-All hardware features are opt-in. Default build requires no hardware.
+All hardware features are enabled by default. Use `--no-default-features` to disable, or selectively enable:
 
 ```
 --features decklink    DeckLink capture/output

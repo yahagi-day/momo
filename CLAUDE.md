@@ -9,17 +9,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test
 
 ```bash
-cargo build                          # build all crates
+cargo build                          # build all crates (DeckLink + UVC + GPU + WebRTC)
 cargo test                           # run all tests
 cargo test -p momo-core              # run tests for a single crate
 cargo test config_serde_roundtrip    # run a single test by name
 cargo clippy -- -D warnings          # lint (treat warnings as errors)
 cargo run                            # start the server (default: 0.0.0.0:8080)
 cargo run -- --config path.json --port 9090  # custom config and port
-cargo build --features decklink      # build with DeckLink hardware support
-cargo build --features uvc           # build with UVC camera support
-cargo build --features gpu           # build with CUDA GPU processing
-cargo build --features webrtc        # build with WebRTC preview support
+cargo build --no-default-features    # build without hardware/GPU/WebRTC features
 ```
 
 Frontend (requires Node.js, optional — fallback HTML is embedded without it):
@@ -150,7 +147,7 @@ Build dependencies (momo-gpu): `build.rs` compiles `.cu` kernels to PTX via `nvc
 
 ### momo-webrtc
 
-- **Feature flag**: `webrtc` — enables `str0m` (WebRTC) + `openh264` (H.264 encoding). Default OFF. Propagates: `momo-app/webrtc` → `momo-web/webrtc` → `momo-webrtc/webrtc`. Signal types (`signal` module) and `convert` module are always available (no feature gate).
+- **Feature flag**: `webrtc` — enables `str0m` (WebRTC) + `openh264` (H.264 encoding). **Default ON**. Propagates: `momo-app/webrtc` → `momo-web/webrtc` → `momo-webrtc/webrtc`. Signal types (`signal` module) and `convert` module are always available (no feature gate).
 - **`WebRtcManager`** — creates sessions with a `SubscribeFn` callback to subscribe to pipeline raw frames. Held in `AppState` as `Arc<WebRtcManager>`.
 - **`SessionHandle`** — handle for an active session: `signal_tx` (client→session), `signal_rx` (session→client), spawned tokio task.
 - **`run_session()`** (feature-gated) — async function managing str0m `Rtc` instance, UDP socket, H.264 encoding via OpenH264, and frame delivery from pipeline broadcast channels.

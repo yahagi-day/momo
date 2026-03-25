@@ -35,13 +35,13 @@ jobs:
         run: npm run build
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --no-default-features
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --no-default-features -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --no-default-features
 
   build-linux:
     needs: check
@@ -70,14 +70,14 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Clippy (gpu + decklink)
-        run: $HOME/.cargo/bin/cargo clippy --workspace --features gpu,decklink -- -D warnings
+      - name: Clippy
+        run: $HOME/.cargo/bin/cargo clippy --workspace -- -D warnings
 
-      - name: Test (gpu + decklink)
-        run: $HOME/.cargo/bin/cargo test --workspace --features gpu,decklink
+      - name: Test
+        run: $HOME/.cargo/bin/cargo test --workspace
 
-      - name: Build release (gpu + decklink)
-        run: $HOME/.cargo/bin/cargo build --release --features gpu,decklink
+      - name: Build release
+        run: $HOME/.cargo/bin/cargo build --release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -119,8 +119,8 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build release (gpu + decklink)
-        run: cargo build --release --target x86_64-pc-windows-msvc --features gpu,decklink
+      - name: Build release
+        run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
