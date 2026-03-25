@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential pkg-config nodejs npm
+          apt-get install -y curl build-essential pkg-config nodejs npm libclang-dev
 
       - name: Install Rust
         run: |
