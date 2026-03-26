@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" width="720" height="220">
+  <defs>
+    <linearGradient id="pinkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#ffb3d9"/>
+      <stop offset="40%"  stop-color="#ff3c94"/>
+      <stop offset="100%" stop-color="#c0006e"/>
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d0d1a"/>
+      <stop offset="100%" stop-color="#1a0d1a"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="6" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softglow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="720" height="220" fill="url(#bgGrad)" rx="16"/>
+
+  <!-- Decorative dots grid -->
+  <g opacity="0.08" fill="#ff3c94">
+    <circle cx="30"  cy="30"  r="1.5"/><circle cx="90"  cy="30"  r="1.5"/><circle cx="150" cy="30"  r="1.5"/>
+    <circle cx="210" cy="30"  r="1.5"/><circle cx="270" cy="30"  r="1.5"/><circle cx="330" cy="30"  r="1.5"/>
+    <circle cx="390" cy="30"  r="1.5"/><circle cx="450" cy="30"  r="1.5"/><circle cx="510" cy="30"  r="1.5"/>
+    <circle cx="570" cy="30"  r="1.5"/><circle cx="630" cy="30"  r="1.5"/><circle cx="690" cy="30"  r="1.5"/>
+    <circle cx="30"  cy="190" r="1.5"/><circle cx="90"  cy="190" r="1.5"/><circle cx="150" cy="190" r="1.5"/>
+    <circle cx="210" cy="190" r="1.5"/><circle cx="270" cy="190" r="1.5"/><circle cx="330" cy="190" r="1.5"/>
+    <circle cx="390" cy="190" r="1.5"/><circle cx="450" cy="190" r="1.5"/><circle cx="510" cy="190" r="1.5"/>
+    <circle cx="570" cy="190" r="1.5"/><circle cx="630" cy="190" r="1.5"/><circle cx="690" cy="190" r="1.5"/>
+  </g>
+
+  <!-- Side accent lines -->
+  <line x1="28" y1="50" x2="28" y2="170" stroke="#ff3c94" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <line x1="692" y1="50" x2="692" y2="170" stroke="#ff3c94" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <line x1="24" y1="50" x2="24" y2="170" stroke="#ff3c94" stroke-width="1" stroke-linecap="round" opacity="0.15"/>
+
+  <!-- MOMO glow layer -->
+  <text x="360" y="148"
+        font-family="'Courier New', Courier, monospace"
+        font-size="116" font-weight="bold"
+        text-anchor="middle"
+        fill="#ff3c94"
+        opacity="0.25"
+        filter="url(#glow)">MOMO</text>
+
+  <!-- MOMO main text -->
+  <text x="360" y="148"
+        font-family="'Courier New', Courier, monospace"
+        font-size="116" font-weight="bold"
+        text-anchor="middle"
+        fill="url(#pinkGrad)"
+        filter="url(#softglow)">MOMO</text>
+
+  <!-- Tagline -->
+  <text x="360" y="186"
+        font-family="'Courier New', Courier, monospace"
+        font-size="13"
+        text-anchor="middle"
+        fill="#ff8ec7"
+        letter-spacing="7"
+        opacity="0.9">LIVE  VIDEO  ROUTER</text>
+
+  <!-- Top accent line -->
+  <line x1="140" y1="42" x2="580" y2="42" stroke="url(#pinkGrad)" stroke-width="1" opacity="0.3"/>
+</svg>
